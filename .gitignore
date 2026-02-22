@@ -15,4 +15,8 @@ pyproject.toml
 uv.lock
 
 # Project specific
+.mypy_cache
 data
+
+# IDE & personal
+.vscode

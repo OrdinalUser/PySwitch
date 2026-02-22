@@ -1,4 +1,4 @@
-from .types import Physical
+from .interface import Physical
 from typing import List
 
 from scapy.all import conf

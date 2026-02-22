@@ -1,56 +1,106 @@
-from dataclasses import dataclass, field
-from PySwitch.common import List, Dict, StrEnum, deque, Optional
-import time
+from PySwitch.common import StrEnum, IntEnum, ClassVar
+
+class MAC:
+    data: bytes
+    
+    def __hash__(self) -> int:
+        return int.from_bytes(self.data)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, MAC) and self.data == other.data
+
+    def __str__(self) -> str:
+        return self.to_str()
+
+    def __repr__(self) -> str:
+        return self.to_str()
+
+    def to_str(self, delim: str = ':') -> str:
+        return delim.join([f"{octet:02x}" for octet in self.data[:6]])
+    
+    @classmethod
+    def from_str(cls, mac_address: str, delim: str = ':') -> MAC:
+        mac = cls()
+        mac.data = bytes([int(octet, 16) for octet in mac_address.split(delim)])[:6]
+        return mac
+    
+    @classmethod
+    def from_bytes(cls, mac_address: bytes) -> MAC:
+        mac = cls()
+        mac.data = bytes(list(reversed(mac_address))[:6])
+        return mac
+    
+    @property
+    def is_broadcast(self) -> bool:
+        return hash(self) == _broadcast_hash
+
+_broadcast_hash = hash(MAC.from_str('ff:ff:ff:ff:ff:ff'))
+
+class IPv4:
+    data: bytes
+    
+    def __hash__(self) -> int:
+        return int.from_bytes(self.data)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, IPv4) and self.data == other.data
+
+    def __str__(self) -> str:
+        return self.to_str()
+
+    def __repr__(self) -> str:
+        return self.to_str()
+
+    def to_str(self) -> str:
+        return ".".join([f"{octet:}" for octet in self.data[:4]])
+    
+    @classmethod
+    def from_str(cls, ip_address: str) -> IPv4:
+        ip = cls()
+        ip.data = bytes([int(octet) for octet in ip_address.split(".")])[:4]
+        return ip
+    
+    @classmethod
+    def from_bytes(cls, ip_address: bytes) -> IPv4:
+        ip = cls()
+        ip.data = ip_address[:4]
+        return ip
 
 # this will probably need to work differently later
 class Protocols(StrEnum):
     UDP = "UDP"
     TCP = "TCP"
 
-class Physical:
-    @dataclass
-    class Interface:
-        name: str           # Scapy iface identifier (on Windows: GUID path)
-        description: str    # Human-readable NIC name
-        mac: str
-        ip: str
-        guid: str = ""
-        ips: List[str] = field(default_factory=list)
+class Frame:
+    data: bytes
 
-        def __str__(self) -> str:
-            return f"{self.description} [{self.mac}] {self.ip}"
-
-@dataclass
-class Statistics:
-    @dataclass(frozen=True)
-    class Entry:
-        size: int
-        timestamp: float
+    def __init__(self, data: bytes):
+        self.data = data
     
-    processed_max_size: int
-    processed: deque[Statistics.Entry] = field(default_factory=lambda: deque()) # Rolling buffer of max size used for aggregation metrics like 'total throughput Bytes/s'
-    counts: Dict[Protocols, int] = field(default_factory=lambda: dict()) # total count of all stages of a packet up to L7 (of those that I can support of course)
-    
-    def AggregateThroughput(self, time_s: float) -> int:
-        # Returns the bytes processed in the last timeframe
-        now = time.time()
-        return sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s])
-    
-    def AddFrame(self, size: int):
-        self.processed.append(Statistics.Entry(size, time.time()))
-        if len(self.processed) > self.processed_max_size:
-            self.processed.popleft()
+    def GetMacSourceAddress(self) -> MAC:
+        return MAC()
 
-@dataclass
-class InterfaceMetrics:
-    ingress: Statistics
-    egress: Statistics
-
-class Virtual:
-    @dataclass
-    class Interface:
-        physical: Optional[Physical.Interface]
-        metrics: InterfaceMetrics
-        
-        def __str__(self) -> str:
-            return str(self.physical)
+class Ethernet2:
+    class EtherType(IntEnum):
+        pass
+    
+    # According to https://en.wikipedia.org/wiki/Ethernet_frame
+    mac_destination: MAC # 6B
+    mac_source: MAC # 6B
+    tag: int # 4B
+    ether_type: int # 2B
+    payload: bytes # 42-1500B
+    frame_check_sequence: int #4B
+    
+    @classmethod
+    def from_frame(cls, frame: Frame) -> Ethernet2:
+        fd = frame.data
+        eth = cls()
+        eth.mac_destination = MAC.from_bytes(bytes(reversed(fd[0:6])))
+        eth.mac_source = MAC.from_bytes(bytes(reversed(fd[6:12])))
+        eth.tag = int.from_bytes(bytes(reversed(fd[12:16])))
+        eth.ether_type = int.from_bytes(bytes(reversed(fd[16:18])))
+        eth.payload = bytes(reversed(fd[18:-4]))
+        eth.frame_check_sequence = int.from_bytes(bytes(reversed(fd[-4:])))
+        return eth
+    

@@ -4,10 +4,8 @@ import queue
 import sys
 from pathlib import Path
 
-
 _mutex = None  # keep reference alive for process lifetime
 _log_queue: queue.SimpleQueue = queue.SimpleQueue()
-
 
 class _QueueHandler(logging.Handler):
     """Feeds formatted log records into _log_queue for the GUI to drain."""

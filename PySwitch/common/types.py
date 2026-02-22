@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pathlib import Path
 from typing import ClassVar, Optional
 
@@ -6,7 +7,6 @@ from dataclasses import dataclass  # kept for re-export
 
 import logging
 logger = logging.getLogger(__name__)
-
 
 class Env(BaseModel):
     _instance: ClassVar[Env | None] = None

@@ -4,3 +4,5 @@ scapy
 dotenv
 tomli_w
 pydantic
+watchdog
+psutil

@@ -1,5 +1,8 @@
+import time
+
 import PySwitch.network as network
 import PySwitch.startup as startup
+from PySwitch.common.config import Configuration
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -7,6 +10,10 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPlainTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
 )
 
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -22,6 +29,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
     BodyLabel,
     CaptionLabel,
+    FlowLayout
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -92,7 +100,7 @@ class InterfaceSlotCard(SimpleCardWidget):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(4)
 
-        # Header: "Slot N"  ●
+        # Header: "Slot N"
         header = QHBoxLayout()
         self._slot_label  = StrongBodyLabel(f"Slot {slot}", self)
         self._status_dot  = QLabel(self)
@@ -127,15 +135,12 @@ class InterfaceSlotCard(SimpleCardWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
         self._assign_btn     = PrimaryPushButton("Assign",     self)
-        self._reassign_btn   = PushButton("Reassign",   self)
         self._disconnect_btn = PushButton("Disconnect", self)
         btn_row.addWidget(self._assign_btn)
-        btn_row.addWidget(self._reassign_btn)
         btn_row.addWidget(self._disconnect_btn)
         root.addLayout(btn_row)
 
         self._assign_btn.clicked.connect(    lambda: self.assign_clicked.emit(self._slot))
-        self._reassign_btn.clicked.connect(  lambda: self.assign_clicked.emit(self._slot))
         self._disconnect_btn.clicked.connect(lambda: self.disconnect_clicked.emit(self._slot))
 
         self._set_unassigned()
@@ -150,7 +155,6 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._tx_label.setText("↑  —")
         self._status_dot.setStyleSheet(self._DOT_UNKNOWN)
         self._assign_btn.setVisible(True)
-        self._reassign_btn.setVisible(False)
         self._disconnect_btn.setVisible(False)
 
     def Refresh(self, iface: network.Virtual.Interface) -> None:
@@ -165,16 +169,13 @@ class InterfaceSlotCard(SimpleCardWidget):
 
         rx = iface.metrics.ingress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
         tx = iface.metrics.egress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
-        self._rx_label.setText(f"↓  {_fmt_bytes(rx)}")
-        self._tx_label.setText(f"↑  {_fmt_bytes(tx)}")
+        self._rx_label.setText(f"↓ {_fmt_bytes(rx)}")
+        self._tx_label.setText(f"↑ {_fmt_bytes(tx)}")
 
-        # TODO: replace with p.IsConnected() once implemented on Physical.Interface
-        self._status_dot.setStyleSheet(self._DOT_UNKNOWN)
+        self._status_dot.setStyleSheet(self._DOT_CONNECTED if p.IsConnected() else self._DOT_DISCONNECTED)
 
         self._assign_btn.setVisible(False)
-        self._reassign_btn.setVisible(True)
         self._disconnect_btn.setVisible(True)
-
 
 # ── Interfaces subinterface ───────────────────────────────────────────────────
 
@@ -188,21 +189,21 @@ class Interfaces(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        cards_row = QHBoxLayout()
+        cards_row = FlowLayout(needAni=True)
         cards_row.setSpacing(12)
-        n = len(self._core.interfaces.interfaces)
+        n = self._core.configuration.static.core.interface_count
         self._cards = [InterfaceSlotCard(i, self) for i in range(n)]
         for card in self._cards:
             cards_row.addWidget(card)
             card.assign_clicked.connect(self._on_assign)
             card.disconnect_clicked.connect(self._on_disconnect)
-        cards_row.addStretch()
+        # cards_row.addStretch()
 
         layout.addLayout(cards_row)
         layout.addStretch()
 
         self._timer = QTimer(self)
-        self._timer.setInterval(1000)
+        self._timer.setInterval(self._core.configuration.static.ui.refresh_rate_ms)
         self._timer.timeout.connect(self._refresh)
         self._timer.start()
         self._refresh()
@@ -214,13 +215,13 @@ class Interfaces(QWidget):
     def _on_assign(self, slot: int) -> None:
         dlg = AssignNICDialog(slot, self.window())
         if dlg.exec():
-            iface = dlg.selected()
-            if iface:
-                self._core.interfaces.interfaces[slot].physical = iface
+            physical_interface = dlg.selected()
+            if physical_interface:
+                self._core.interfaces.AssignSlot(slot, physical_interface)
         self._refresh()
 
     def _on_disconnect(self, slot: int) -> None:
-        self._core.interfaces.interfaces[slot].physical = None
+        self._core.interfaces.ClearSlot(slot)
         self._refresh()
 
 
@@ -251,7 +252,7 @@ class Logs(QWidget):
         self._clear_btn.clicked.connect(self._console.clear)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(50)  # drain at ~20 fps
+        self._timer.setInterval(Configuration.Get().static.ui.log_drain_ms)  # drain at ~20 fps
         self._timer.timeout.connect(self._drain)
         self._timer.start()
 
@@ -344,3 +345,60 @@ class PhysicalSniffer(QWidget):
     def _on_packet(self, pkt) -> None:
         # Called from sniffer thread — emit signal to marshal onto main thread
         self._packet_received.emit(pkt.summary())
+
+
+# ── MAC Table ─────────────────────────────────────────────────────────────────
+
+class MACTableView(QWidget):
+    _COLUMNS = ("MAC Address", "Interface Name", "Slot", "Expires In (s)")
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self.setObjectName("Sub.MACTable")
+        self._core = network.Core.Get()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        self._clear_btn = PushButton("Clear Table", self)
+        toolbar.addStretch()
+        toolbar.addWidget(self._clear_btn)
+
+        self._table = QTableWidget(0, len(self._COLUMNS), self)
+        self._table.setHorizontalHeaderLabels(self._COLUMNS)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.verticalHeader().setVisible(False)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+
+        layout.addLayout(toolbar)
+        layout.addWidget(self._table)
+
+        self._clear_btn.clicked.connect(self._on_clear)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._core.configuration.static.ui.refresh_rate_ms)
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        entries = self._core.mac_table.ToList()
+        now = time.monotonic()
+        self._table.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            remaining = max(0.0, entry.timestamp_expiration - now)
+            self._table.setItem(row, 0, QTableWidgetItem(str(entry.mac)))
+            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name))
+            self._table.setItem(row, 2, QTableWidgetItem(str(entry.interface.slot)))
+            self._table.setItem(row, 3, QTableWidgetItem(f"{remaining:.1f}"))
+
+    def _on_clear(self) -> None:
+        self._core.ClearMac()
+        self._refresh()

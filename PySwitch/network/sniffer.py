@@ -3,7 +3,7 @@ from typing import Callable
 
 from scapy.all import sniff, Packet
 
-from .types import Physical
+from .interface import Physical
 
 
 class Sniffer:
