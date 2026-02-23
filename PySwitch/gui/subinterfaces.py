@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPlainTextEdit,
-    QTableWidget,
     QTableWidgetItem,
     QHeaderView,
     QAbstractItemView,
@@ -29,7 +28,8 @@ from qfluentwidgets import (
     StrongBodyLabel,
     BodyLabel,
     CaptionLabel,
-    FlowLayout
+    FlowLayout,
+    TableWidget
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -366,7 +366,8 @@ class MACTableView(QWidget):
         toolbar.addStretch()
         toolbar.addWidget(self._clear_btn)
 
-        self._table = QTableWidget(0, len(self._COLUMNS), self)
+        self._table = TableWidget(self)
+        self._table.setColumnCount(len(self._COLUMNS))
         self._table.setHorizontalHeaderLabels(self._COLUMNS)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

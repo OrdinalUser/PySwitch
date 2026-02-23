@@ -6,3 +6,4 @@ tomli_w
 pydantic
 watchdog
 psutil
+types-psutil

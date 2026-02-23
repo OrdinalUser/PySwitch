@@ -84,10 +84,12 @@ class _LiveFileHandler(FileSystemEventHandler):
 
 class UI(BaseModel):
     refresh_rate_ms: int = 1000
-    log_drain_ms: int = 100
+    log_drain_ms: int = 1000
 
 class Core(BaseModel):
     interface_count: int = 2
+    inteface_buffer: int = 256
+    interface_drain_s: float = 0.05
 
 class Metrics(BaseModel):
     throughput_buffer_size: int = 1000

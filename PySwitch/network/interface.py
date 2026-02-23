@@ -1,5 +1,5 @@
 from __future__ import annotations
-from PySwitch.common import List, Dict, Deque, Optional, Queue
+from PySwitch.common import List, Dict, Deque, Optional, Queue, Tuple
 from PySwitch.network.types import Frame, Protocols
 from dataclasses import dataclass, field
 
@@ -135,9 +135,13 @@ class Virtual:
     class Interface:
         physical:      Optional[Physical.Interface]
         metrics:       InterfaceMetrics
-        ingress_queue: Queue[tuple[Frame, Virtual.Interface]]  # shared with Core, supplied externally
+        ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]]  # shared with Core, we write to this
         slot: int
+        batch_size: int
+        batch_latency: float
 
+        _last_batch_s: float = field(default=0.0, init=False, repr=False)
+        _batch: List[Tuple[Frame, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
         _stop_event:       threading.Event            = field(default_factory=threading.Event, init=False, repr=False)
         _thread:           Optional[threading.Thread] = field(default=None,               init=False, repr=False)
         _send_thread:      Optional[threading.Thread] = field(default=None,               init=False, repr=False)
@@ -192,7 +196,7 @@ class Virtual:
             wpcap = _get_wpcap()
             while not self._stop_event.is_set():
                 try:
-                    frame = self._send_queue.get(timeout=0.05)
+                    frame = self._send_queue.get(timeout=0.05) # Try to fast forward without sleeping
                 except Empty:
                     continue
                 if frame is None:  # Stop() sentinel
@@ -224,7 +228,7 @@ class Virtual:
                 pcap_device.encode(),
                 65535,
                 PCAP_OPENFLAG_PROMISCUOUS | PCAP_OPENFLAG_NOCAPTURE_LOCAL,
-                1000,   # read timeout ms — pcap_next_ex blocks at most this long per call
+                max(1, int(self.batch_latency * 1000)),  # read timeout ms — pcap_next_ex blocks at most this long per call
                 None,
                 errbuf,
             )
@@ -278,7 +282,19 @@ class Virtual:
         def _on_packet(self, data: bytes) -> None:
             frame = Frame(data)
             self.metrics.ingress.AddFrame(len(frame.data))
-            self.ingress_queue.put((frame, self))
+            self._batch.append((frame, self))
+            
+            now = time.monotonic()
+            if len(self._batch) >= self.batch_size:
+                self._enqueue_batch(now)
+            elif now - self._last_batch_s >= self.batch_latency:
+                self._enqueue_batch(now)
+
+        def _enqueue_batch(self, now: float) -> None:
+            if len(self._batch) == 0: return
+            self.ingress_queue.put(self._batch)
+            self._last_batch_s = now
+            self._batch = []
 
         def __hash__(self) -> int:
             return hash(self.physical)

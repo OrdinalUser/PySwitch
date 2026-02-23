@@ -4,7 +4,7 @@
 
 - [assignment file](./docs/assignment.pdf)
 
-## Compilation & running
+## "Compilation" & running
 
 - ensure a proper Python environment
   - [uv](https://docs.astral.sh/uv/) (highly recommended) or use [pip venv](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/)
@@ -16,8 +16,20 @@
 ### GUI
 
 - PySide6 (Qt Python Wrapper)
-- PySide6-Fluent-Widgets (Qt Fluent Widgets and themes for cohesive styling)
+- PySide6-Fluent-Widgets (Qt Fluent Widgets for cohesive styling)
 
 ### Network
 
-- scapy (network card interaction)
+- scapy (network card interaction and Windows interface fetching)
+- wpcap.dll (system dll, used for inbound/outbound frames)
+
+### Config
+
+- dotenv (reading .env files)
+- tomli_w (writing .toml files)
+- pydantic (type checking and serialization)
+
+### Other
+
+- watchdog (file watching)
+- psutil (querying Windows state)

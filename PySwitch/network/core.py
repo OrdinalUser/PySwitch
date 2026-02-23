@@ -5,7 +5,7 @@ from PySwitch.network.common import GetAllAvailableNICs
 from PySwitch.network.types import MAC, Ethernet2, IPv4
 from PySwitch.network.mac_table import MACTable
 
-from threading import Thread
+from threading import Thread, Event
 from queue import Empty
 import time
 
@@ -19,16 +19,18 @@ class Interfaces:
     mac_table: MACTable
     on_change: Callable
 
-    def __init__(self, slots: int = 2, processed_size: int = 1000, *, ingress_queue: Queue[Tuple[Frame, Virtual.Interface]], mac_table: MACTable, on_change: Callable):
+    def __init__(self, configuration: Configuration, *, ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]], mac_table: MACTable, on_change: Callable):
         self.on_change = on_change
         self.interfaces = [
             Virtual.Interface(
                 None,
-                InterfaceMetrics(Statistics(processed_size), Statistics(processed_size)),
+                InterfaceMetrics(Statistics(configuration.static.metrics.throughput_buffer_size), Statistics(configuration.static.metrics.throughput_buffer_size)),
                 ingress_queue=ingress_queue,
-                slot=slot
+                slot=slot,
+                batch_latency=configuration.static.core.interface_drain_s,
+                batch_size=configuration.static.core.inteface_buffer
             )
-            for slot in range(slots)
+            for slot in range(configuration.static.core.interface_count)
         ]
         self.port_mapping = dict()
         self.mac_table = mac_table
@@ -89,14 +91,14 @@ class Core:
     configuration: Configuration
     
     interfaces: Interfaces
-    ingress_queue: Queue[Tuple[Frame, Virtual.Interface]]
+    ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]]
     mac_table: MACTable
     
     listening: ListeningOn
     
     core_thread: Thread
     clean_thread: Thread
-    stop_event: bool
+    stop_event: Event
 
     @staticmethod
     def Get() -> Core:
@@ -111,10 +113,10 @@ class Core:
         instance.configuration = Configuration.Get()
         
         instance.mac_table = MACTable()
-        instance.interfaces = Interfaces(instance.configuration.static.core.interface_count, instance.configuration.static.metrics.throughput_buffer_size, ingress_queue=instance.ingress_queue, on_change=instance.OnInterfaceChange, mac_table=instance.mac_table)
+        instance.interfaces = Interfaces(configuration=instance.configuration, ingress_queue=instance.ingress_queue, on_change=instance.OnInterfaceChange, mac_table=instance.mac_table)
         instance.OnInterfaceChange()
         
-        instance.stop_event = False
+        instance.stop_event = Event()
         instance.core_thread = Thread(daemon=True, target=instance.FrameHandler)
         instance.core_thread.start()
         instance.clean_thread = Thread(daemon=True, target=instance.CleanHandler)
@@ -132,6 +134,7 @@ class Core:
         source_slot = self.mac_table.Get(eth.mac_source)
         if source_slot != -1 and source_slot != interface.slot:
             return
+        
         # Learn MAC from packet
         self.mac_table.Learn(eth.mac_source, interface)
         # If MAC broadcast, flood early
@@ -148,20 +151,24 @@ class Core:
         self.interfaces.SendVia(frame, interface.slot, destination_slot)
 
     def FrameHandler(self) -> None:
-        while not self.stop_event:
-            try:                    
-                frame, interface = self.ingress_queue.get(timeout=0.05)
+        while not self.stop_event.is_set():
+            try:
+                frames = self.ingress_queue.get(timeout=self.configuration.live.core.cleanup_thread_sleep_s)
+                print(f"Processing len={len(frames)} frames; qsize={self.ingress_queue.qsize()}", end="")
             except Empty:
+                print("\r", end="")
                 continue
             try:
-                self._process_frame(frame, interface)
+                for frame, interface in frames:
+                    self._process_frame(frame, interface)
             finally:
                 self.ingress_queue.task_done()
+                print("\r", end="")
     
     def CleanHandler(self) -> None:
-        while not self.stop_event:
+        while not self.stop_event.is_set():
             self.mac_table.Clean(slot=-1) # Check all slots
-            time.sleep(self.configuration.live.core.cleanup_thread_sleep_s)
+            time.sleep(self.configuration.live.core.core_thread_sleep_s)
     
     def OnInterfaceChange(self) -> None:
         self.listening = Core.ListeningOn(
@@ -182,6 +189,3 @@ class Core:
     def ClearMac(self) -> None:
         logger.info("Clearing MAC table")
         self.mac_table.Clear()
-    
-    def __del__(self):
-        self.stop_event = True

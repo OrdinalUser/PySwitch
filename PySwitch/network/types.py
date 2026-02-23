@@ -1,4 +1,5 @@
 from PySwitch.common import StrEnum, IntEnum, ClassVar
+import struct
 
 class MAC:
     data: bytes
@@ -80,10 +81,12 @@ class Frame:
     def GetMacSourceAddress(self) -> MAC:
         return MAC()
 
+_ETH_STRUCT = struct.Struct('!6s6sIH')
+
 class Ethernet2:
     class EtherType(IntEnum):
         pass
-    
+
     # According to https://en.wikipedia.org/wiki/Ethernet_frame
     mac_destination: MAC # 6B
     mac_source: MAC # 6B
@@ -91,16 +94,21 @@ class Ethernet2:
     ether_type: int # 2B
     payload: bytes # 42-1500B
     frame_check_sequence: int #4B
-    
+
     @classmethod
     def from_frame(cls, frame: Frame) -> Ethernet2:
-        fd = frame.data
+        mv = memoryview(frame.data)
+        dst_b, src_b, tag, ether_type = _ETH_STRUCT.unpack_from(mv)
+
+        mac_dst = MAC(); mac_dst.data = dst_b
+        mac_src = MAC(); mac_src.data = src_b
+
         eth = cls()
-        eth.mac_destination = MAC.from_bytes(bytes(reversed(fd[0:6])))
-        eth.mac_source = MAC.from_bytes(bytes(reversed(fd[6:12])))
-        eth.tag = int.from_bytes(bytes(reversed(fd[12:16])))
-        eth.ether_type = int.from_bytes(bytes(reversed(fd[16:18])))
-        eth.payload = bytes(reversed(fd[18:-4]))
-        eth.frame_check_sequence = int.from_bytes(bytes(reversed(fd[-4:])))
+        eth.mac_destination = mac_dst
+        eth.mac_source = mac_src
+        eth.tag = tag
+        eth.ether_type = ether_type
+        eth.payload = bytes(mv[18:-4])
+        eth.frame_check_sequence = struct.unpack_from('!I', mv, len(mv) - 4)[0]
         return eth
     
