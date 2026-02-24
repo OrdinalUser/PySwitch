@@ -27,9 +27,9 @@ class Application(FluentWindow):
         self.addSubInterface(self.mac_view,   FluentIcon.CALENDAR,          "MAC Table")
 
     @staticmethod
-    def Run() -> None:
+    def Run() -> int:
         import sys
         app = QApplication(sys.argv)
         window = Application()
         window.show()
-        sys.exit(app.exec())
+        return app.exec()

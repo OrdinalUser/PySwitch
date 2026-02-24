@@ -1,6 +1,6 @@
 from __future__ import annotations
-from PySwitch.common import List, Dict, Deque, Optional, Queue, Tuple
-from PySwitch.network.types import Frame, Protocols
+from PySwitch.common import List, Deque, Optional, Queue, Tuple, StrEnum, DefaultDict, NamedTuple
+from PySwitch.network.frame import Frame, Protocols
 from dataclasses import dataclass, field
 
 import ctypes
@@ -62,6 +62,16 @@ def _get_wpcap() -> ctypes.CDLL:
 
 # ──────────────────────────────────────────────────────────────────────────────
 
+class MediaType(StrEnum):
+    Unknown = "Unknown"
+    Ethernet2 = "Ethernet2"
+    Wifi = "Wifi"
+    @classmethod
+    def from_str(cls, string: str) -> MediaType:
+        if string == "802.3": return MediaType.Ethernet2
+        elif string == "Native 802.11": return MediaType.Wifi
+        else: return MediaType.Unknown
+
 class Physical:
     @dataclass
     class Interface:
@@ -69,6 +79,7 @@ class Physical:
         description: str    # Human-readable NIC name
         mac: str
         ip: str
+        media_type: MediaType
         guid: str = ""
         ips: List[str] = field(default_factory=list)
 
@@ -76,7 +87,7 @@ class Physical:
             return f"{self.description} [{self.mac}] {self.ip}"
 
         def IsConnected(self) -> bool:
-            import winreg, psutil
+            import winreg, psutil # type: ignore
             # scapy description = adapter model; psutil keys = Windows friendly name.
             # Bridge via GUID → registry → friendly name so we always hit the right NIC.
             # huh? I'm so glad the LLMs can figure these things out..
@@ -99,27 +110,34 @@ class Physical:
 
 @dataclass
 class Statistics:
-    @dataclass(frozen=True)
-    class Entry:
+    class Entry(NamedTuple):
         size: int
         timestamp: float
 
     processed_max_size: int
+    total_bytes: int = field(default=0, init=False)
     processed: Deque[Statistics.Entry] = field(default_factory=lambda: Deque())
-    counts: Dict[Protocols, int] = field(default_factory=lambda: dict())
+    counts: DefaultDict[Protocols, int] = field(default_factory=lambda: DefaultDict(int))
 
     def AggregateThroughput(self, time_s: float) -> int:
         now = time.time()
-        return sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s])
+        return int(sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s]) / time_s)
 
-    def AddFrame(self, size: int):
+    def AddFrame(self, data: bytes):
+        size = len(data)
+        self.total_bytes += size
         self.processed.append(Statistics.Entry(size, time.time()))
         if len(self.processed) > self.processed_max_size:
             self.processed.popleft()
+        # Inefficient, but will do for this assignment
+        frame = Frame.from_bytes(data)
+        for proto in frame.protocol_stack.keys():
+            self.counts[proto] += 1
 
     def Clear(self) -> None:
         self.processed = Deque()
-        self.counts = dict()
+        self.total_bytes = 0
+        self.counts = DefaultDict(int)
 
 @dataclass
 class InterfaceMetrics:
@@ -135,19 +153,19 @@ class Virtual:
     class Interface:
         physical:      Optional[Physical.Interface]
         metrics:       InterfaceMetrics
-        ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]]  # shared with Core, we write to this
+        ingress_queue: Queue[List[Tuple[bytes, Virtual.Interface]]]  # shared with Core, we write to this
         slot: int
         batch_size: int
         batch_latency: float
 
         _last_batch_s: float = field(default=0.0, init=False, repr=False)
-        _batch: List[Tuple[Frame, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
+        _batch: List[Tuple[bytes, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
         _stop_event:       threading.Event            = field(default_factory=threading.Event, init=False, repr=False)
         _thread:           Optional[threading.Thread] = field(default=None,               init=False, repr=False)
         _send_thread:      Optional[threading.Thread] = field(default=None,               init=False, repr=False)
         _pcap_handle:      Optional[int]              = field(default=None,               init=False, repr=False)  # capture — only touched by capture thread
         _pcap_send_handle: Optional[int]              = field(default=None,               init=False, repr=False)  # send — only touched by send thread
-        _send_queue:       Queue[Optional[Frame]]     = field(default_factory=lambda: Queue(maxsize=512), init=False, repr=False)
+        _send_queue:       Queue[Optional[bytes]]     = field(default_factory=lambda: Queue(maxsize=512), init=False, repr=False)
 
         def __str__(self) -> str:
             return str(self.physical)
@@ -183,7 +201,7 @@ class Virtual:
             self._thread = None
             self.physical = None
 
-        def Send(self, frame: Frame) -> None:
+        def Send(self, frame: bytes) -> None:
             """Enqueues a frame for async sending; drops silently if the send queue is full."""
             try:
                 self._send_queue.put_nowait(frame)
@@ -196,20 +214,19 @@ class Virtual:
             wpcap = _get_wpcap()
             while not self._stop_event.is_set():
                 try:
-                    frame = self._send_queue.get(timeout=0.05) # Try to fast forward without sleeping
+                    data = self._send_queue.get()
                 except Empty:
                     continue
-                if frame is None:  # Stop() sentinel
+                if data is None:  # Stop() sentinel
                     break
                 handle = self._pcap_send_handle
                 if handle is None:
                     continue
-                data = frame.data
                 rc = wpcap.pcap_sendpacket(handle, data, len(data))
                 if rc != 0:
                     logger.warning("pcap_sendpacket failed on slot %d", self.slot)
                 else:
-                    self.metrics.egress.AddFrame(len(data))
+                    self.metrics.egress.AddFrame(data)
 
         def _capture(self) -> None:
             physical = self.physical
@@ -280,9 +297,8 @@ class Virtual:
                 wpcap.pcap_close(rx_handle)
 
         def _on_packet(self, data: bytes) -> None:
-            frame = Frame(data)
-            self.metrics.ingress.AddFrame(len(frame.data))
-            self._batch.append((frame, self))
+            self.metrics.ingress.AddFrame(data)
+            self._batch.append((data, self))
             
             now = time.monotonic()
             if len(self._batch) >= self.batch_size:

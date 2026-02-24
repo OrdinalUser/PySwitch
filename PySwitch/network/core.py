@@ -1,6 +1,7 @@
 from __future__ import annotations
-from PySwitch.common import Optional, ClassVar, Configuration, List, Queue, Tuple, Callable, Dict, Set, NamedTuple
-from PySwitch.network.interface import Frame, Physical, Virtual, InterfaceMetrics, Statistics
+from PySwitch.common import Optional, ClassVar, Configuration, List, Queue, Tuple, Callable, Dict, Set, NamedTuple, Cast
+from PySwitch.network.interface import Physical, Virtual, InterfaceMetrics, Statistics
+from PySwitch.network.frame import Frame
 from PySwitch.network.common import GetAllAvailableNICs
 from PySwitch.network.types import MAC, Ethernet2, IPv4
 from PySwitch.network.mac_table import MACTable
@@ -19,7 +20,7 @@ class Interfaces:
     mac_table: MACTable
     on_change: Callable
 
-    def __init__(self, configuration: Configuration, *, ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]], mac_table: MACTable, on_change: Callable):
+    def __init__(self, configuration: Configuration, *, ingress_queue: Queue[List[Tuple[bytes, Virtual.Interface]]], mac_table: MACTable, on_change: Callable):
         self.on_change = on_change
         self.interfaces = [
             Virtual.Interface(
@@ -38,7 +39,7 @@ class Interfaces:
     def SlotInUse(self, slot: int):
         if slot >= len(self.interfaces) or slot < 0:
             raise ValueError(f"Invalid slot argument, provided {slot}, expected in range 0-{len(self.interfaces)-1}")
-        return self.interfaces[slot].physical is None
+        return self.interfaces[slot].physical is not None
 
     def ClearSlot(self, slot: int):
         if slot >= len(self.interfaces) or slot < 0:
@@ -62,16 +63,16 @@ class Interfaces:
         self.port_mapping[self.interfaces[slot]] = slot
         self.on_change()
 
-    def AvailableNICs(self, exclude_slot: int | None = None) -> List[Physical.Interface]:
+    def AvailableNICs(self, exclude_slot: int | None = None, force_reload: bool = False) -> List[Physical.Interface]:
         """Returns NICs not already assigned to another slot."""
         assigned = {
             self.interfaces[i].physical.name # type: ignore
             for i in range(len(self.interfaces))
             if i != exclude_slot and self.interfaces[i].physical is not None
         }
-        return [nic for nic in GetAllAvailableNICs() if nic.name not in assigned]
+        return [nic for nic in GetAllAvailableNICs(force_reload) if nic.name not in assigned]
     
-    def SendVia(self, frame: Frame, slot_from: int, slot_to: int = -1,):
+    def SendVia(self, frame: bytes, slot_from: int, slot_to: int = -1,):
         """Forwards frame via virtual port assigned on slot_to, -1 implies flooding to every port except sender"""
         if slot_to != -1:
             # Unicast
@@ -81,6 +82,12 @@ class Interfaces:
             for slot_idx in range(len(self.interfaces)):
                 if slot_idx == slot_from or self.interfaces[slot_idx].physical is None: continue
                 self.interfaces[slot_idx].Send(frame)
+    
+    def Shutdown(self) -> None:
+        """Stops all listening interfaces"""
+        for slot in range(len(self.interfaces)):
+            if self.SlotInUse(slot):
+                self.ClearSlot(slot)
 
 class Core:
     class ListeningOn(NamedTuple):
@@ -91,7 +98,7 @@ class Core:
     configuration: Configuration
     
     interfaces: Interfaces
-    ingress_queue: Queue[List[Tuple[Frame, Virtual.Interface]]]
+    ingress_queue: Queue[List[Tuple[bytes, Virtual.Interface]]]
     mac_table: MACTable
     
     listening: ListeningOn
@@ -124,31 +131,33 @@ class Core:
         
         return instance
     
-    def _process_frame(self, frame: Frame, interface: Virtual.Interface) -> None:
+    def _process_frame(self, frame_data: bytes, interface: Virtual.Interface) -> None:
         if interface.physical is None: # Poor mans data race check
             return
-        # Parse Ethernet2 header
-        eth = Ethernet2.from_frame(frame)
+        # Parse frame
+        frame = Frame.from_bytes(frame_data)
+        eth = Cast(Ethernet2, frame.ethernet2)
         # Discard loopback: source MAC is known on a different slot than the one
         # this frame arrived on — npcap echoed our own sendp() back as ingress
         source_slot = self.mac_table.Get(eth.mac_source)
         if source_slot != -1 and source_slot != interface.slot:
+            # Some frames do fall under this check, perhaps the host OS is fighting us?
             return
         
         # Learn MAC from packet
         self.mac_table.Learn(eth.mac_source, interface)
         # If MAC broadcast, flood early
         if eth.mac_destination.is_broadcast:
-            self.interfaces.SendVia(frame, interface.slot, -1)
+            self.interfaces.SendVia(frame_data, interface.slot, -1)
             return
         # Figure out if the frame is for us on L2
         if eth.mac_destination in self.listening.mac:
             # Frame intended for us, consume - TODO
             # Most likely ARP or some other service
             return
-        # Frame is not meant for us, look for interface to send forward through
+        # Frame is not meant for us, look for interface to forward through or flood
         destination_slot = self.mac_table.Get(eth.mac_destination)
-        self.interfaces.SendVia(frame, interface.slot, destination_slot)
+        self.interfaces.SendVia(frame_data, interface.slot, destination_slot)
 
     def FrameHandler(self) -> None:
         while not self.stop_event.is_set():
@@ -189,3 +198,7 @@ class Core:
     def ClearMac(self) -> None:
         logger.info("Clearing MAC table")
         self.mac_table.Clear()
+
+    def Shutdown(self) -> None:
+        """Explicit shutdown"""
+        self.interfaces.Shutdown()

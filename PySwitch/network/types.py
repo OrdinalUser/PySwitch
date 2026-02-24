@@ -1,5 +1,4 @@
-from PySwitch.common import StrEnum, IntEnum, ClassVar
-import struct
+from PySwitch.common import IntEnum, Optional
 
 class MAC:
     data: bytes
@@ -67,48 +66,66 @@ class IPv4:
         ip.data = ip_address[:4]
         return ip
 
-# this will probably need to work differently later
-class Protocols(StrEnum):
-    UDP = "UDP"
-    TCP = "TCP"
-
-class Frame:
-    data: bytes
-
-    def __init__(self, data: bytes):
-        self.data = data
-    
-    def GetMacSourceAddress(self) -> MAC:
-        return MAC()
-
-_ETH_STRUCT = struct.Struct('!6s6sIH')
-
 class Ethernet2:
+    # According to https://en.wikipedia.org/wiki/Ethernet_frame
     class EtherType(IntEnum):
         pass
 
-    # According to https://en.wikipedia.org/wiki/Ethernet_frame
     mac_destination: MAC # 6B
     mac_source: MAC # 6B
-    tag: int # 4B
+    tag: Optional[int] # 4B
     ether_type: int # 2B
-    payload: bytes # 42-1500B
-    frame_check_sequence: int #4B
+    payload: memoryview # 42-1500B
+    frame_check_sequence: int # 4B
 
-    @classmethod
-    def from_frame(cls, frame: Frame) -> Ethernet2:
-        mv = memoryview(frame.data)
-        dst_b, src_b, tag, ether_type = _ETH_STRUCT.unpack_from(mv)
-
-        mac_dst = MAC(); mac_dst.data = dst_b
-        mac_src = MAC(); mac_src.data = src_b
-
-        eth = cls()
-        eth.mac_destination = mac_dst
-        eth.mac_source = mac_src
-        eth.tag = tag
-        eth.ether_type = ether_type
-        eth.payload = bytes(mv[18:-4])
-        eth.frame_check_sequence = struct.unpack_from('!I', mv, len(mv) - 4)[0]
-        return eth
+class IP4_Header:
+    # According to:
+    # https://en.wikipedia.org/wiki/IPv4
+    # https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
+    class Version(IntEnum):
+        V4 = 4
+    class Protocol(IntEnum):
+        ICMP = 1
+        IGMP = 2
+        TCP = 6
+        UDP = 17
+        ENCAP = 6
+        OSPF = 89
+        SCTP = 132
+    class Flags:
+        reserved: bool
+        dont_fragment: bool
+        more_fragments: bool
     
+    version: int # 4 bits
+    ihl: int # 4 bits (Internet Header Length)
+    dscp: int # 6 bits
+    ecn: int # 2 bits
+    total_length: int # 2B (entire packet size including header and data)
+    identification: int # 2B
+    flags: Flags # 3 bits - R-DF-MF -> Reserved, Don't Fragment, More Fragments
+    fragment_offset: int # 13 bits (in 8-byte units)
+    time_to_live: int # 1B
+    protocol: Protocol # 1B
+    header_checksum: int # 2B
+    source: IPv4 # 4B
+    destination: IPv4 # 4B
+    options: memoryview # 0-320 bits, padded to multiple of 32bits
+    payload: memoryview # the rest of the packet
+
+class ARP:
+    # According to https://en.wikipedia.org/wiki/Address_Resolution_Protocol
+    class ProtocolType(IntEnum):
+        IPv4 = 0x0800
+    class Operation(IntEnum):
+        Request = 1
+        Reply = 2
+    hardware_type: int # 2B (1 = Ethernet)
+    protocol_type: ARP.ProtocolType # 2B (0x0800 = IPv4)
+    hardware_length: int # 1B (6 for MAC)
+    protocol_length: int # 1B (4 for IPv4)
+    operation: ARP.Operation # 2B (1 = request, 2 = reply)
+    sender_mac: MAC # 6B
+    sender_ip: IPv4 # 4B
+    target_mac: MAC # 6B
+    target_ip: IPv4 # 4B

@@ -2,11 +2,12 @@ import time
 
 import PySwitch.network as network
 import PySwitch.startup as startup
-from PySwitch.common.config import Configuration
+from PySwitch.common import List, Tuple, Configuration
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
+    QGridLayout,
     QWidget,
     QLabel,
     QPlainTextEdit,
@@ -18,10 +19,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
 
-from qfluentwidgets import (
+from qfluentwidgets import ( # type: ignore
     ComboBox,
     PushButton,
     PrimaryPushButton,
+    TransparentPushButton,
     SimpleCardWidget,
     MessageBoxBase,
     SubtitleLabel,
@@ -36,13 +38,18 @@ from qfluentwidgets import (
 
 _THROUGHPUT_WINDOW_S = 5.0
 
-def _fmt_bytes(n: int) -> str:
+def _fmt_bytes(n: int, suffix: str = "/s") -> str:
     if n >= 1_048_576:
-        return f"{n / 1_048_576:.1f} MB/s"
+        return f"{n / 1_048_576:.1f} MiB{suffix}"
     if n >= 1024:
-        return f"{n / 1024:.1f} KB/s"
-    return f"{n} B/s"
+        return f"{n / 1024:.1f} KiB{suffix}"
+    return f"{n} B{suffix}"
 
+
+_PROTOCOL_ROWS: List[Tuple[network.Protocols, str]] = [
+    (protocol, protocol.value)
+    for protocol in network.Protocols
+]
 
 # ── Assign NIC dialog ─────────────────────────────────────────────────────────
 
@@ -68,10 +75,10 @@ class AssignNICDialog(MessageBoxBase):
         self.cancelButton.setText("Cancel")
 
         self._refresh_btn.clicked.connect(self._populate)
-        self._populate()
+        self._populate(force_reload=False)
 
-    def _populate(self) -> None:
-        self._ifaces = network.Core.Get().interfaces.AvailableNICs(exclude_slot=self._slot)
+    def _populate(self, force_reload: bool = True) -> None:
+        self._ifaces = network.Core.Get().interfaces.AvailableNICs(exclude_slot=self._slot, force_reload=force_reload)
         self._combo.clear()
         for iface in self._ifaces:
             self._combo.addItem(iface.description or iface.name)
@@ -114,12 +121,16 @@ class InterfaceSlotCard(SimpleCardWidget):
         root.addSpacing(4)
 
         # Interface info
-        self._name_label = BodyLabel("—", self)
+        self._friendly_label = BodyLabel("—", self)
+        self._name_label = CaptionLabel("", self)
         self._mac_label  = CaptionLabel("", self)
         self._ip_label   = CaptionLabel("", self)
+        self._type_label = CaptionLabel("", self)
+        root.addWidget(self._friendly_label)
         root.addWidget(self._name_label)
         root.addWidget(self._mac_label)
         root.addWidget(self._ip_label)
+        root.addWidget(self._type_label)
 
         root.addSpacing(8)
 
@@ -128,6 +139,39 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._tx_label = BodyLabel("↑  —", self)
         root.addWidget(self._rx_label)
         root.addWidget(self._tx_label)
+
+        root.addSpacing(4)
+
+        # Stats toggle
+        toggle_row = QHBoxLayout()
+        self._stats_btn = TransparentPushButton("▶ Stats", self)
+        self._stats_btn.clicked.connect(self._toggle_stats)
+        toggle_row.addStretch()
+        toggle_row.addWidget(self._stats_btn)
+        root.addLayout(toggle_row)
+
+        # Stats section — hidden by default
+        self._stats_section = QWidget(self)
+        self._stats_section.setVisible(False)
+        grid = QGridLayout(self._stats_section)
+        grid.setContentsMargins(0, 2, 0, 0)
+        grid.setSpacing(2)
+        for col, text in enumerate(("", "IN", "OUT")):
+            lbl = CaptionLabel(text, self._stats_section)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignRight if col > 0 else Qt.AlignmentFlag.AlignLeft)
+            grid.addWidget(lbl, 0, col)
+        self._stats_labels: list[tuple[CaptionLabel, CaptionLabel]] = []
+        for row_i, (_, name) in enumerate(_PROTOCOL_ROWS, start=1):
+            name_lbl = CaptionLabel(name,  self._stats_section)
+            in_lbl   = CaptionLabel("0",   self._stats_section)
+            out_lbl  = CaptionLabel("0",   self._stats_section)
+            in_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            out_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            grid.addWidget(name_lbl, row_i, 0)
+            grid.addWidget(in_lbl,   row_i, 1)
+            grid.addWidget(out_lbl,  row_i, 2)
+            self._stats_labels.append((in_lbl, out_lbl))
+        root.addWidget(self._stats_section)
 
         root.addStretch()
 
@@ -147,13 +191,32 @@ class InterfaceSlotCard(SimpleCardWidget):
 
     # ── internal state helpers ────────────────────────────────────────────────
 
+    def _toggle_stats(self) -> None:
+        visible = not self._stats_section.isVisible()
+        self._stats_section.setVisible(visible)
+        self._stats_btn.setText("▼ Stats" if visible else "▶ Stats")
+
+    def _update_stats(self, metrics: network.InterfaceMetrics) -> None:
+        for i, (proto, _) in enumerate(_PROTOCOL_ROWS):
+            in_lbl, out_lbl = self._stats_labels[i]
+            in_lbl.setText(str(metrics.ingress.counts.get(proto, 0)))
+            out_lbl.setText(str(metrics.egress.counts.get(proto, 0)))
+
     def _set_unassigned(self) -> None:
-        self._name_label.setText("No interface assigned")
+        self._friendly_label.setText("No interface assigned")
+        self._name_label.setText("")
         self._mac_label.setText("")
         self._ip_label.setText("")
+        self._type_label.setText("")
         self._rx_label.setText("↓  —")
         self._tx_label.setText("↑  —")
         self._status_dot.setStyleSheet(self._DOT_UNKNOWN)
+        self._stats_section.setVisible(False)
+        self._stats_btn.setText("▶ Stats")
+        self._stats_btn.setEnabled(False)
+        for in_lbl, out_lbl in self._stats_labels:
+            in_lbl.setText("0")
+            out_lbl.setText("0")
         self._assign_btn.setVisible(True)
         self._disconnect_btn.setVisible(False)
 
@@ -163,16 +226,20 @@ class InterfaceSlotCard(SimpleCardWidget):
             self._set_unassigned()
             return
 
-        self._name_label.setText(p.description or p.name)
+        self._friendly_label.setText(p.description)
+        self._name_label.setText(p.name)
         self._mac_label.setText(p.mac)
         self._ip_label.setText(p.ip)
+        self._type_label.setText(p.media_type.value)
 
         rx = iface.metrics.ingress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
         tx = iface.metrics.egress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
-        self._rx_label.setText(f"↓ {_fmt_bytes(rx)}")
-        self._tx_label.setText(f"↑ {_fmt_bytes(tx)}")
+        self._rx_label.setText(f"↓ {_fmt_bytes(rx)} ({_fmt_bytes(iface.metrics.ingress.total_bytes, suffix="")})")
+        self._tx_label.setText(f"↑ {_fmt_bytes(tx)} ({_fmt_bytes(iface.metrics.egress.total_bytes, suffix="")})")
 
         self._status_dot.setStyleSheet(self._DOT_CONNECTED if p.IsConnected() else self._DOT_DISCONNECTED)
+        self._stats_btn.setEnabled(True)
+        self._update_stats(iface.metrics)
 
         self._assign_btn.setVisible(False)
         self._disconnect_btn.setVisible(True)
@@ -318,7 +385,7 @@ class PhysicalSniffer(QWidget):
         self._populate_nics()
 
     def _populate_nics(self) -> None:
-        self._ifaces = network.GetAllAvailableNICs()
+        self._ifaces = network.GetAllAvailableNICs(force_reload=True)
         self._nic_dropdown.clear()
         for iface in self._ifaces:
             label = iface.description or iface.name
@@ -396,7 +463,7 @@ class MACTableView(QWidget):
         for row, entry in enumerate(entries):
             remaining = max(0.0, entry.timestamp_expiration - now)
             self._table.setItem(row, 0, QTableWidgetItem(str(entry.mac)))
-            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name))
+            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name if entry.interface.physical else "Unknwon"))
             self._table.setItem(row, 2, QTableWidgetItem(str(entry.interface.slot)))
             self._table.setItem(row, 3, QTableWidgetItem(f"{remaining:.1f}"))
 
