@@ -45,6 +45,16 @@ def _fmt_bytes(n: int, suffix: str = "/s") -> str:
         return f"{n / 1024:.1f} KiB{suffix}"
     return f"{n} B{suffix}"
 
+def _fmt_elapsed(started: float) -> str:
+    s = int(time.time() - started)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60:02d}m"
+    return f"{s // 86400}d {(s % 86400) // 3600:02d}h"
+
 
 _PROTOCOL_ROWS: List[Tuple[network.Protocols, str]] = [
     (protocol, protocol.value)
@@ -74,7 +84,7 @@ class AssignNICDialog(MessageBoxBase):
         self.yesButton.setText("Assign")
         self.cancelButton.setText("Cancel")
 
-        self._refresh_btn.clicked.connect(self._populate)
+        self._refresh_btn.clicked.connect(lambda: self._populate(force_reload=True))
         self._populate(force_reload=False)
 
     def _populate(self, force_reload: bool = True) -> None:
@@ -86,7 +96,6 @@ class AssignNICDialog(MessageBoxBase):
     def selected(self) -> network.Physical.Interface | None:
         idx = self._combo.currentIndex()
         return self._ifaces[idx] if 0 <= idx < len(self._ifaces) else None
-
 
 # ── Interface slot card ───────────────────────────────────────────────────────
 
@@ -125,20 +134,20 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._name_label = CaptionLabel("", self)
         self._mac_label  = CaptionLabel("", self)
         self._ip_label   = CaptionLabel("", self)
-        self._type_label = CaptionLabel("", self)
         root.addWidget(self._friendly_label)
         root.addWidget(self._name_label)
         root.addWidget(self._mac_label)
         root.addWidget(self._ip_label)
-        root.addWidget(self._type_label)
 
         root.addSpacing(8)
 
         # Throughput
-        self._rx_label = BodyLabel("↓  —", self)
-        self._tx_label = BodyLabel("↑  —", self)
+        self._rx_label      = BodyLabel("↓  —", self)
+        self._tx_label      = BodyLabel("↑  —", self)
+        self._elapsed_label = CaptionLabel("", self)
         root.addWidget(self._rx_label)
         root.addWidget(self._tx_label)
+        root.addWidget(self._elapsed_label)
 
         root.addSpacing(4)
 
@@ -148,6 +157,7 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._stats_btn.clicked.connect(self._toggle_stats)
         toggle_row.addStretch()
         toggle_row.addWidget(self._stats_btn)
+        
         root.addLayout(toggle_row)
 
         # Stats section — hidden by default
@@ -171,6 +181,9 @@ class InterfaceSlotCard(SimpleCardWidget):
             grid.addWidget(in_lbl,   row_i, 1)
             grid.addWidget(out_lbl,  row_i, 2)
             self._stats_labels.append((in_lbl, out_lbl))
+        self._clear_btn = TransparentPushButton("Clear", self._stats_section)
+        self._clear_btn.clicked.connect(lambda: network.Core.Get().ClearMetrics(self._slot))
+        grid.addWidget(self._clear_btn, len(_PROTOCOL_ROWS) + 1, 2)
         root.addWidget(self._stats_section)
 
         root.addStretch()
@@ -207,9 +220,9 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._name_label.setText("")
         self._mac_label.setText("")
         self._ip_label.setText("")
-        self._type_label.setText("")
         self._rx_label.setText("↓  —")
         self._tx_label.setText("↑  —")
+        self._elapsed_label.setText("")
         self._status_dot.setStyleSheet(self._DOT_UNKNOWN)
         self._stats_section.setVisible(False)
         self._stats_btn.setText("▶ Stats")
@@ -227,15 +240,17 @@ class InterfaceSlotCard(SimpleCardWidget):
             return
 
         self._friendly_label.setText(p.description)
-        self._name_label.setText(p.name)
+        self._name_label.setText(f"{p.media_type.value} - {p.name}")
         self._mac_label.setText(p.mac)
         self._ip_label.setText(p.ip)
-        self._type_label.setText(p.media_type.value)
 
         rx = iface.metrics.ingress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
         tx = iface.metrics.egress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
         self._rx_label.setText(f"↓ {_fmt_bytes(rx)} ({_fmt_bytes(iface.metrics.ingress.total_bytes, suffix="")})")
         self._tx_label.setText(f"↑ {_fmt_bytes(tx)} ({_fmt_bytes(iface.metrics.egress.total_bytes, suffix="")})")
+
+        elapsed = f"Elapsed time {_fmt_elapsed(iface.record_started)}" if iface.record_started is not None else ""
+        self._elapsed_label.setText(elapsed)
 
         self._status_dot.setStyleSheet(self._DOT_CONNECTED if p.IsConnected() else self._DOT_DISCONNECTED)
         self._stats_btn.setEnabled(True)

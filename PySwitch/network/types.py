@@ -1,4 +1,5 @@
-from PySwitch.common import IntEnum, Optional
+from PySwitch.common import IntEnum, Optional, NamedTuple
+from enum import IntFlag, StrEnum
 
 class MAC:
     data: bytes
@@ -67,7 +68,7 @@ class IPv4:
         return ip
 
 class Ethernet2:
-    # According to https://en.wikipedia.org/wiki/Ethernet_frame
+    # Reference: https://en.wikipedia.org/wiki/Ethernet_frame
     class EtherType(IntEnum):
         pass
 
@@ -79,7 +80,7 @@ class Ethernet2:
     frame_check_sequence: int # 4B
 
 class IP4_Header:
-    # According to:
+    # Reference::
     # https://en.wikipedia.org/wiki/IPv4
     # https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers
     class Version(IntEnum):
@@ -89,7 +90,7 @@ class IP4_Header:
         IGMP = 2
         TCP = 6
         UDP = 17
-        ENCAP = 6
+        ENCAP = 4
         OSPF = 89
         SCTP = 132
     class Flags:
@@ -114,7 +115,7 @@ class IP4_Header:
     payload: memoryview # the rest of the packet
 
 class ARP:
-    # According to https://en.wikipedia.org/wiki/Address_Resolution_Protocol
+    # Reference: https://en.wikipedia.org/wiki/Address_Resolution_Protocol
     class ProtocolType(IntEnum):
         IPv4 = 0x0800
     class Operation(IntEnum):
@@ -129,3 +130,85 @@ class ARP:
     sender_ip: IPv4 # 4B
     target_mac: MAC # 6B
     target_ip: IPv4 # 4B
+
+class UDP:
+    # Reference: https://en.wikipedia.org/wiki/User_Datagram_Protocol
+    source_port: int # 2B
+    destination_port: int # 2b
+    length: int # 2B
+    checksum: int # 2B
+    payload: memoryview # the rest
+
+class TCP:
+    # Reference: https://en.wikipedia.org/wiki/Transmission_Control_Protocol
+    class Flags(IntFlag):
+        FIN = 0x01
+        SYN = 0x02
+        RST = 0x04
+        PSH = 0x08
+        ACK = 0x10
+        URG = 0x20
+        ECE = 0x40
+        CWR = 0x80
+    source_port: int # 2B
+    destination_port: int # 2B
+    sequence_number: int # 4B
+    acknowledgement_number: int # 4B
+    data_offset: int # 4 bits
+    # reserved # 4bits - not needed
+    flags: TCP.Flags
+    window: int # 2B
+    checksum: int # 2B
+    urgent_pointer: int # 2B
+    options: Optional[memoryview] # (Options) If present, Data Offset will be greater than 5. Padded with zeroes to a multiple of 32 bits, since Data Offset counts words of 4 octets.
+    payload: memoryview
+
+class ICMP:
+    # Reference: https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
+    class Type(IntEnum):
+        echo_reply = 0
+        reserved_1 = 1
+        reserved_2 = 2
+        destination_unreachable = 3
+        redirect_message = 5
+        echo_request = 8
+        router_advertisement = 9
+        router_solicitation = 10
+        time_exceeded = 11
+        parameter_problem = 12
+        timestamp = 13
+        timestamp_reply = 14
+        extended_echo_request = 42
+        extended_echo_reply = 43
+    
+    type: ICMP.Type     # 1B
+    code: int           # 1B
+    checksum: int       # 2B
+    data: memoryview    # 4B
+    payload: memoryview # the rest of the header
+
+class HTTP:
+    # Reference: https://en.wikipedia.org/wiki/HTTP
+    class Method(StrEnum):
+        get = "GET"
+        put = "PUT"
+        head = "HEAD"
+        post = "POST"
+        trace = "TRACE"
+        patch = "PATCH"
+        delete = "DELETE"
+        connect = "CONNECT"
+        options = "OPTIONS"
+    
+    method: Optional[Method]
+    payload: memoryview # includes payload
+
+    # Precomputed once: encoded request method prefixes + response prefix
+    _MAGIC: frozenset = frozenset(m.encode(encoding="ascii") for m in Method) | {b'HTTP/'}
+
+    @staticmethod
+    def ContainsMagic(view: memoryview) -> bool:
+        if len(view) < 4:
+            return False
+        start = bytes(view[:8])
+        return any(start.startswith(magic) for magic in HTTP._MAGIC)

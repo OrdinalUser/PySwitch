@@ -27,7 +27,7 @@ def GetAllAvailableNICs(force_reload: bool = False) -> List[Physical.Interface]:
         for iface in conf.ifaces.values():
             guid = getattr(iface, "guid", "")
             media_type = MediaType.from_str(nic_types.get(guid.upper(), "Unspecified"))
-            if media_type == MediaType.Unknown: continue
+            if media_type != MediaType.Ethernet2: continue
             _pyswitch_common_physical_interfaces_cache.append(Physical.Interface(
                 name=getattr(iface, "name", ""),
                 description=getattr(iface, "description", getattr(iface, "name", "")),

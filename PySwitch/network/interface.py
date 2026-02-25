@@ -8,6 +8,10 @@ import threading
 import time
 import logging
 
+class InterfaceData(NamedTuple):
+    data: bytes
+    frame: Frame
+
 logger = logging.getLogger(__name__)
 
 # ── wpcap.dll ctypes bindings ──────────────────────────────────────────────────
@@ -123,15 +127,14 @@ class Statistics:
         now = time.time()
         return int(sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s]) / time_s)
 
-    def AddFrame(self, data: bytes):
-        size = len(data)
+    def AddFrame(self, if_data: InterfaceData):
+        size = len(if_data.data)
         self.total_bytes += size
         self.processed.append(Statistics.Entry(size, time.time()))
         if len(self.processed) > self.processed_max_size:
             self.processed.popleft()
         # Inefficient, but will do for this assignment
-        frame = Frame.from_bytes(data)
-        for proto in frame.protocol_stack.keys():
+        for proto in if_data.frame.protocol_stack.keys():
             self.counts[proto] += 1
 
     def Clear(self) -> None:
@@ -153,19 +156,20 @@ class Virtual:
     class Interface:
         physical:      Optional[Physical.Interface]
         metrics:       InterfaceMetrics
-        ingress_queue: Queue[List[Tuple[bytes, Virtual.Interface]]]  # shared with Core, we write to this
+        ingress_queue: Queue[List[Tuple[InterfaceData, Virtual.Interface]]]  # shared with Core, we write to this
         slot: int
         batch_size: int
         batch_latency: float
+        record_started: Optional[float] = field(default=None, init=False, repr=False)
 
         _last_batch_s: float = field(default=0.0, init=False, repr=False)
-        _batch: List[Tuple[bytes, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
+        _batch: List[Tuple[InterfaceData, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
         _stop_event:       threading.Event            = field(default_factory=threading.Event, init=False, repr=False)
         _thread:           Optional[threading.Thread] = field(default=None,               init=False, repr=False)
         _send_thread:      Optional[threading.Thread] = field(default=None,               init=False, repr=False)
         _pcap_handle:      Optional[int]              = field(default=None,               init=False, repr=False)  # capture — only touched by capture thread
         _pcap_send_handle: Optional[int]              = field(default=None,               init=False, repr=False)  # send — only touched by send thread
-        _send_queue:       Queue[Optional[bytes]]     = field(default_factory=lambda: Queue(maxsize=512), init=False, repr=False)
+        _send_queue:       Queue[Optional[InterfaceData]]     = field(default_factory=lambda: Queue(maxsize=512), init=False, repr=False)
 
         def __str__(self) -> str:
             return str(self.physical)
@@ -188,6 +192,7 @@ class Virtual:
             self.physical = interface
             self._send_queue = Queue()
             self._stop_event.clear()
+            self.record_started = time.time()
             self._thread      = threading.Thread(target=self._capture,     daemon=True)
             self._send_thread = threading.Thread(target=self._send_worker, daemon=True)
             self._thread.start()
@@ -195,13 +200,14 @@ class Virtual:
 
         def Stop(self) -> None:
             """Signals both threads to stop and releases the physical interface."""
+            self.record_started = None
             self._stop_event.set()
             self._send_queue.put(None)  # wake the send thread so it exits promptly
             self._send_thread = None
             self._thread = None
             self.physical = None
 
-        def Send(self, frame: bytes) -> None:
+        def Send(self, frame: InterfaceData) -> None:
             """Enqueues a frame for async sending; drops silently if the send queue is full."""
             try:
                 self._send_queue.put_nowait(frame)
@@ -214,19 +220,19 @@ class Virtual:
             wpcap = _get_wpcap()
             while not self._stop_event.is_set():
                 try:
-                    data = self._send_queue.get()
+                    if_data = self._send_queue.get()
                 except Empty:
                     continue
-                if data is None:  # Stop() sentinel
+                if if_data is None:  # Stop() sentinel
                     break
                 handle = self._pcap_send_handle
                 if handle is None:
                     continue
-                rc = wpcap.pcap_sendpacket(handle, data, len(data))
+                rc = wpcap.pcap_sendpacket(handle, if_data.data, len(if_data.data))
                 if rc != 0:
                     logger.warning("pcap_sendpacket failed on slot %d", self.slot)
                 else:
-                    self.metrics.egress.AddFrame(data)
+                    self.metrics.egress.AddFrame(if_data)
 
         def _capture(self) -> None:
             physical = self.physical
@@ -296,9 +302,10 @@ class Virtual:
                 wpcap.pcap_close(tx_handle)
                 wpcap.pcap_close(rx_handle)
 
-        def _on_packet(self, data: bytes) -> None:
-            self.metrics.ingress.AddFrame(data)
-            self._batch.append((data, self))
+        def _on_packet(self, raw_data: bytes) -> None:
+            if_data = InterfaceData(raw_data, Frame.from_bytes(raw_data))
+            self.metrics.ingress.AddFrame(if_data)
+            self._batch.append((if_data, self))
             
             now = time.monotonic()
             if len(self._batch) >= self.batch_size:

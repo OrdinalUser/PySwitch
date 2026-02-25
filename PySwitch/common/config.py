@@ -5,7 +5,7 @@ import threading
 from typing import ClassVar, Callable
 
 from .types import Env, BaseModel, Path
-from pydantic import ConfigDict, PrivateAttr
+from pydantic import PrivateAttr # type: ignore
 
 import tomllib
 import tomli_w
@@ -13,8 +13,8 @@ import tomli_w
 import logging
 logger = logging.getLogger(__name__)
 
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler
-from watchdog.observers import Observer
+from watchdog.events import FileModifiedEvent, FileSystemEventHandler # type: ignore
+from watchdog.observers import Observer # type: ignore
 
 
 # ── TOML helpers ──────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ def _from_toml(cls: type, filepath: Path):
         _write_toml(default, filepath)
         return default
     logger.debug("Loading %s config from %s", cls.__name__, filepath.resolve())
-    return cls.model_validate(_load_toml(filepath))
+    return cls.model_validate(_load_toml(filepath)) # type: ignore
 
 
 # ── Live file watcher ─────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ class _LiveFileHandler(FileSystemEventHandler):
             self._last_t = now
 
         try:
-            new_live = _from_toml(Live, self._filepath).Prepare()
+            new_live = _from_toml(Live, self._filepath).Prepare() # type: ignore
         except Exception as exc:
             logger.warning("Live config reload failed, keeping current: %s", exc)
             return
@@ -101,7 +101,7 @@ class Static(BaseModel):
 
     @staticmethod
     def Get(filepath: Path) -> Static:
-        return _from_toml(Static, filepath).Prepare()
+        return _from_toml(Static, filepath).Prepare() # type: ignore
 
     @staticmethod
     def Default() -> Static:
@@ -113,15 +113,15 @@ class Static(BaseModel):
             logger.warning(f'Invalid value for "Static.interface_count", "{self.core.interface_count}" must be in range 2-32, using default {default.core.interface_count}')
             self.interface_count = default.core.interface_count
         if (self.metrics.throughput_buffer_size < 1000 or self.metrics.throughput_buffer_size > 1_000_000):
-            logger.warning(f'Invalid value for "Static.processed_size", "{self.metrics.throughput_buffer_size}" must be in range 1000-1000000, using default {default.processed_size}')
+            logger.warning(f'Invalid value for "Static.processed_size", "{self.metrics.throughput_buffer_size}" must be in range 1000-1000000, using default {default.metrics.throughput_buffer_size}')
             self.metrics.throughput_buffer_size = default.metrics.throughput_buffer_size
         return self
 
 
 class CoreLive(BaseModel):
-    mac_expiry_s: int = 300
-    cleanup_thread_sleep_s: int = 15
-    core_thread_sleep_s: int = 3
+    mac_expiry_s: float = 300
+    cleanup_thread_sleep_s: float = 15
+    core_thread_sleep_s: float = 3
 
 class Live(BaseModel):
     core: CoreLive = CoreLive()
@@ -131,13 +131,13 @@ class Live(BaseModel):
     _watching: ClassVar[Live | None] = None
 
     # PrivateAttr: Pydantic ignores these for validation and serialization
-    _observer: Observer | None  = PrivateAttr(default=None)
+    _observer: Observer | None  = PrivateAttr(default=None) # type: ignore
     _filepath:  Path | None     = PrivateAttr(default=None)
     _on_reload: Callable | None = PrivateAttr(default=None)
 
     @staticmethod
     def Get(filepath: Path) -> Live:
-        live = _from_toml(Live, filepath).Prepare()
+        live = _from_toml(Live, filepath).Prepare() # type: ignore
         live._filepath = filepath
         return live
 

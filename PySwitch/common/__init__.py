@@ -3,7 +3,7 @@ from .config import Static, Live, Configuration
 
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, ClassVar, Dict, Tuple, Callable, TypeAlias, NamedTuple, Set, Protocol, cast as Cast, Type, Any, OrderedDict
+from typing import List, Optional, ClassVar, Dict, Tuple, Callable, TypeAlias, NamedTuple, Set, Protocol, cast as Cast, Type, Any, OrderedDict, runtime_checkable
 from enum import StrEnum, IntEnum
 
 from collections import deque as Deque, defaultdict as DefaultDict
