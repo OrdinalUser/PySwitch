@@ -1,5 +1,5 @@
 from __future__ import annotations
-from PySwitch.common import Optional, ClassVar, Configuration, List, Queue, Tuple, Callable, Dict, Set, NamedTuple, Cast
+from PySwitch.common import Optional, ClassVar, Configuration, List, Queue, Tuple, Callable, Dict, Set, NamedTuple, Cast, BoundedSet
 from PySwitch.network.interface import Physical, Virtual, InterfaceMetrics, Statistics, InterfaceData
 from PySwitch.network.frame import Frame
 from PySwitch.network.common import GetAllAvailableNICs
@@ -113,6 +113,8 @@ class Core:
     core_thread: Thread
     clean_thread: Thread
     stop_event: Event
+    
+    processed_frames: BoundedSet
 
     @staticmethod
     def Get() -> Core:
@@ -136,12 +138,26 @@ class Core:
         instance.clean_thread = Thread(daemon=True, target=instance.CleanHandler)
         instance.clean_thread.start()
         
+        instance.processed_frames = BoundedSet(instance.configuration.static.core.dedup_last_frames)
+        
         return instance
     
     def _process_frame_data(self, if_data: InterfaceData, interface: Virtual.Interface) -> None:
         if interface.physical is None: # Poor mans data race check
             return
-        # Parse frame
+        
+        # Has this frame already been processed? Thanks Windows
+        # This is a terrible solution as it can actually drop repeating frames
+        # that WERE supposed to be repeated! Tread cautiously and keep this in mind!
+        # This does not fix data races on said interfaces! Slot 1 may still preempt Slot 0, even if said frame was meant to arrive on Slot 0
+        if if_data.data in self.processed_frames:
+            return
+        else:
+            self.processed_frames.add(if_data.data)
+            # Had to pull this out from ingress threads to not skew metrics
+            interface.metrics.ingress.AddFrame(if_data)
+        
+        # Deal with the L2 data
         frame = if_data.frame
         eth = Cast(Ethernet2, frame.ethernet2)
         # Discard loopback: source MAC is known on a different slot than the one
@@ -151,12 +167,13 @@ class Core:
             # Some frames do fall under this check, perhaps the host OS is fighting us?
             return
         
-        # Learn MAC from packet
+        ## Learn MAC from packet
         self.mac_table.Learn(eth.mac_source, interface)
         
-        # If MAC broadcast, flood early
+        ## If MAC broadcast, flood early
         if eth.mac_destination.is_broadcast:
             self.interfaces.SendVia(if_data, interface.slot, -1)
+            return
         
         # Figure out if the frame is for us on L2
         # if eth.mac_destination in self.listening.mac: # includes broadcast check
@@ -165,12 +182,12 @@ class Core:
             # or return to pipeline
             # pass
         
-        # Frame is not meant for us, nor a broadcast, look for interface to forward through or flood
+        ## Frame is not meant for us, nor a broadcast, look for interface to forward through or flood
         destination_slot = self.mac_table.Get(eth.mac_destination)
         if destination_slot == interface.slot:
             # Output to source slot, nuh-uh? Let us not cause another cycle, please
             return
-        # Forward or flood, we don't care now
+        ## Forward or flood, we don't care now
         self.interfaces.SendVia(if_data, interface.slot, destination_slot)
 
     def FrameHandler(self) -> None:

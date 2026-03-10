@@ -1,4 +1,3 @@
-from __future__ import annotations
 from PySwitch.common import Configuration, Dict, List, NamedTuple
 from PySwitch.network.interface import Virtual
 from PySwitch.network.types import MAC
@@ -12,28 +11,29 @@ class MACTable:
                                         # contains .slot which is used like a port
         timestamp_expiration: float     # future timestamp in which it expires
     
-    mapping: Dict[int, Entry] # manual hash to avoid keys() being owned by the Dict
-    configuration: Configuration
+    mapping: Dict[MAC, Entry] # the actual mapping logic for constant time lookup
+    configuration: Configuration # global singleton for configuration
     
     def __init__(self):
         self.mapping = dict()
         self.configuration = Configuration.Get()
     
     def Learn(self, source_mac: MAC, interface: Virtual.Interface) -> None:
+        """Learns the source mac address from a given interface to be present on given slot"""
         if interface.physical is None: return
         now = time.monotonic()
-        self.mapping[hash(source_mac)] = MACTable.Entry(source_mac, interface, now + self.configuration.live.core.mac_expiry_s)
+        self.mapping[source_mac] = MACTable.Entry(source_mac, interface, now + self.configuration.live.core.mac_expiry_s)
     
     def Get(self, dest_mac: MAC) -> int:
         """Returns -1 if flood"""
-        key = hash(dest_mac)
-        if key in self.mapping:
+        if dest_mac in self.mapping:
             now = time.monotonic()
-            entry = self.mapping[key]
+            entry = self.mapping[dest_mac]
             return entry.interface.slot if now < entry.timestamp_expiration else -1
         return -1
     
     def Clean(self, slot: int) -> None:
+        """Removes all entries accompanied on slot or those that are expired"""
         now = time.monotonic()
         replacement_map = dict()
         for mac_source, (mac, interface, timestamp_expiry) in self.mapping.items():
@@ -48,4 +48,5 @@ class MACTable:
         return list(self.mapping.values())
     
     def Clear(self) -> None:
+        """Clears the entire table"""
         self.mapping = dict()

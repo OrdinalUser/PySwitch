@@ -5,7 +5,7 @@ class MAC:
     data: bytes
     
     def __hash__(self) -> int:
-        return int.from_bytes(self.data)
+        return hash(self.data)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, MAC) and self.data == other.data

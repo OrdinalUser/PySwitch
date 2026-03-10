@@ -83,16 +83,17 @@ class _LiveFileHandler(FileSystemEventHandler):
 # ── Settings models ───────────────────────────────────────────────────────────
 
 class UI(BaseModel):
-    refresh_rate_ms: int = 1000
-    log_drain_ms: int = 1000
+    refresh_rate_ms: int = 3000
+    log_drain_ms: int = 3000
 
 class Core(BaseModel):
     interface_count: int = 2
-    inteface_buffer: int = 256
+    inteface_buffer: int = 32
     interface_drain_s: float = 0.05
+    dedup_last_frames: int = 64
 
 class Metrics(BaseModel):
-    throughput_buffer_size: int = 1000
+    throughput_buffer_size: int = 100
 
 class Static(BaseModel):
     ui: UI = UI()
@@ -112,7 +113,7 @@ class Static(BaseModel):
         if (self.core.interface_count < 2 or self.core.interface_count > 32):
             logger.warning(f'Invalid value for "Static.interface_count", "{self.core.interface_count}" must be in range 2-32, using default {default.core.interface_count}')
             self.interface_count = default.core.interface_count
-        if (self.metrics.throughput_buffer_size < 1000 or self.metrics.throughput_buffer_size > 1_000_000):
+        if (self.metrics.throughput_buffer_size < 10 or self.metrics.throughput_buffer_size > 1_000_000):
             logger.warning(f'Invalid value for "Static.processed_size", "{self.metrics.throughput_buffer_size}" must be in range 1000-1000000, using default {default.metrics.throughput_buffer_size}')
             self.metrics.throughput_buffer_size = default.metrics.throughput_buffer_size
         return self

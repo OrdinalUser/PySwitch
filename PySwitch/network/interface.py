@@ -1,4 +1,3 @@
-from __future__ import annotations
 from PySwitch.common import List, Deque, Optional, Queue, Tuple, StrEnum, DefaultDict, NamedTuple
 from PySwitch.network.frame import Frame, Protocols
 from dataclasses import dataclass, field
@@ -112,22 +111,25 @@ class Physical:
         def __hash__(self) -> int:
             return hash(self.name)
 
-@dataclass
+@dataclass(slots=True)
 class Statistics:
+    """Holds network frame statistics over one direction"""
     class Entry(NamedTuple):
         size: int
         timestamp: float
 
     processed_max_size: int
     total_bytes: int = field(default=0, init=False)
-    processed: Deque[Statistics.Entry] = field(default_factory=lambda: Deque())
-    counts: DefaultDict[Protocols, int] = field(default_factory=lambda: DefaultDict(int))
+    processed: Deque[Statistics.Entry] = field(init=False, default_factory=Deque)
+    counts: DefaultDict[Protocols, int] = field(init=False, default_factory=lambda: DefaultDict(int))
 
     def AggregateThroughput(self, time_s: float) -> int:
+        """Aggregates measured throughput from the rolling buffer over entries that fit the timeframe"""
         now = time.time()
         return int(sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s]) / time_s)
 
     def AddFrame(self, if_data: InterfaceData):
+        """Logs frame metrics"""
         size = len(if_data.data)
         self.total_bytes += size
         self.processed.append(Statistics.Entry(size, time.time()))
@@ -138,16 +140,19 @@ class Statistics:
             self.counts[proto] += 1
 
     def Clear(self) -> None:
-        self.processed = Deque()
+        """Resets metrics to defaults"""
         self.total_bytes = 0
+        self.processed = Deque()
         self.counts = DefaultDict(int)
 
 @dataclass
 class InterfaceMetrics:
+    """Holds statistics over the entire interface, both for in and out"""
     ingress: Statistics
     egress: Statistics
 
     def Clear(self) -> None:
+        """Convenience wrapper to clear all metrics"""
         self.ingress.Clear()
         self.egress.Clear()
 
@@ -304,7 +309,6 @@ class Virtual:
 
         def _on_packet(self, raw_data: bytes) -> None:
             if_data = InterfaceData(raw_data, Frame.from_bytes(raw_data))
-            self.metrics.ingress.AddFrame(if_data)
             self._batch.append((if_data, self))
             
             now = time.monotonic()

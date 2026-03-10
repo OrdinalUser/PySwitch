@@ -17,6 +17,7 @@ uv.lock
 # Project specific
 .mypy_cache
 data
+external
 
 # IDE & personal
 .vscode
