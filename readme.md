@@ -13,6 +13,8 @@
 
 ## Required libraries and their usage
 
+This list does not include libary dependencies
+
 ### GUI
 
 - PySide6 (Qt Python Wrapper)
@@ -21,7 +23,8 @@
 ### Network
 
 - scapy (network card interaction and Windows interface fetching)
-- wpcap.dll (system dll, used for inbound/outbound frames)
+- wpcap.dll (native non-python system dll, used for traffic inbound/outbound capture/transmit)
+- wmi (used to register physical NIC events such as cable attach/detach)
 
 ### Config
 
@@ -32,4 +35,4 @@
 ### Other
 
 - watchdog (file watching)
-- psutil (querying Windows state)
+- psutil and types-psutil (querying Windows state)

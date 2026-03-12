@@ -1,9 +1,11 @@
 from __future__ import annotations
+from typing import Literal
 from PySwitch.common import Optional, ClassVar, Configuration, List, Queue, Tuple, Callable, Dict, Set, NamedTuple, Cast, BoundedSet
 from PySwitch.network.interface import Physical, Virtual, InterfaceMetrics, Statistics, InterfaceData
 from PySwitch.network.common import GetAllAvailableNICs
 from PySwitch.network.types import MAC, Ethernet2, IPv4
 from PySwitch.network.mac_table import MACTable
+from PySwitch.network.frame import Frame
 import PySwitch.network.service as Service
 
 from threading import Thread, Event
@@ -46,9 +48,9 @@ class Interfaces:
             raise ValueError(f"Invalid slot argument, provided {slot}, expected in range 0-{len(self.interfaces)-1}")
         if self.interfaces[slot].physical is None:
             raise ValueError(f"Slot {slot} is already empty")
-        logger.info(f"Unassigned interface slot {slot}, removing {self.interfaces[slot]}")
         self.mac_table.Clean(slot)
         self.port_mapping.pop(self.interfaces[slot])
+        logger.info(f"Unassigned interface {slot=}, removing {self.interfaces[slot]}")
         self.interfaces[slot].Stop()
         self.interfaces[slot].ClearMetrics()
         self.on_change()
@@ -76,11 +78,12 @@ class Interfaces:
         """Forwards frame via virtual port assigned on slot_to, -1 implies flooding to every port except sender"""
         if slot_to != -1:
             # Unicast
-            self.interfaces[slot_to].Send(frame)
+            if self.interfaces[slot_to].connected:
+                self.interfaces[slot_to].Send(frame)
         else:
             # Send everywhere
             for slot_idx in range(len(self.interfaces)):
-                if slot_idx == slot_from or self.interfaces[slot_idx].physical is None: continue
+                if slot_idx == slot_from or not self.interfaces[slot_idx].connected: continue
                 self.interfaces[slot_idx].Send(frame)
     
     def ResetMetrics(self, slot: int) -> None:
@@ -116,6 +119,7 @@ class Core:
     
     processed_frames: BoundedSet
     services: Service.Service
+    wmi_thread: Thread
 
     @staticmethod
     def Get() -> Core:
@@ -145,7 +149,10 @@ class Core:
         instance.core_thread.start()
         instance.clean_thread = Thread(daemon=True, target=instance.CleanHandler)
         instance.clean_thread.start()
-        
+        instance.wmi_thread = Thread(daemon=True, target=instance._wmi_watch)
+        instance.wmi_thread.start()
+
+        logger.critical("Initialized")
         return instance
     
     def _process_frame_data(self, if_data: InterfaceData, interface: Virtual.Interface) -> None:
@@ -197,6 +204,44 @@ class Core:
         ## Forward or flood, we don't care now
         self.interfaces.SendVia(if_data, interface.slot, destination_slot)
 
+    def OnSlotEvent(self, slot: int, event: Literal["connect", "disconnect"]) -> None:
+        iface = self.interfaces.interfaces[slot]
+        if event == "disconnect":
+            iface.disconnected_at = time.monotonic()
+            self.mac_table.Clean(slot=slot)
+            logger.info("Link down on slot %d (%s) [%s]", slot, iface.physical.name if iface.physical else "?", iface.physical.description if iface.physical else "?")
+        else:
+            logger.info("Link up on slot %d (%s) [%s]", slot, iface.physical.name if iface.physical else "?", iface.physical.description if iface.physical else "?")
+        self.OnInterfaceChange()
+
+    def _wmi_watch(self) -> None:
+        try:
+            import wmi  # type: ignore
+            c = wmi.WMI()
+            watcher = c.Win32_NetworkAdapter.watch_for(
+                notification_type="modification",
+                delay_secs=self.configuration.static.core.wmi_delay_s,
+            )
+            while not self.stop_event.is_set():
+                try:
+                    change = watcher(timeout_ms=1000)
+                except wmi.x_wmi_timed_out:
+                    continue
+
+                for iface in self.interfaces.interfaces:
+                    if iface.physical is None or iface.physical.guid != change.GUID:
+                        continue
+                    now_connected: bool = bool(change.NetEnabled)
+                    was_connected = iface.connected
+                    iface.connected = now_connected
+                    if was_connected is True and not now_connected:
+                        self.OnSlotEvent(iface.slot, "disconnect")
+                    elif was_connected is not True and now_connected:
+                        self.OnSlotEvent(iface.slot, "connect")
+                    break
+        except Exception:
+            logger.exception("WMI watcher thread crashed")
+
     def FrameHandler(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -233,13 +278,19 @@ class Core:
         
         return
 
+    def Send(self, data: bytes):
+        if_data = InterfaceData(data=data, frame=Frame.from_bytes(data))
+        self.interfaces.SendVia(if_data, -1, -1)
+
     def ClearMac(self) -> None:
-        logger.info("Clearing MAC table")
+        logger.info("Clearing global MAC table")
         self.mac_table.Clear()
 
     def ClearMetrics(self, slot: int) -> None:
+        logger.info(f"Clearing metrics on {slot=}")
         self.interfaces.ResetMetrics(slot)
 
     def Shutdown(self) -> None:
         """Explicit shutdown"""
         self.interfaces.Shutdown()
+        logger.critical("Shutdown")

@@ -1,8 +1,12 @@
+from __future__ import annotations # debugger must have for odd reasons
 from PySwitch.common import Configuration, Dict, List, NamedTuple
 from PySwitch.network.interface import Virtual
 from PySwitch.network.types import MAC
 
 import time
+
+import logging
+logger = logging.getLogger(__name__)
 
 class MACTable:
     class Entry(NamedTuple):
@@ -34,6 +38,9 @@ class MACTable:
     
     def Clean(self, slot: int) -> None:
         """Removes all entries accompanied on slot or those that are expired"""
+        if slot != -1:
+            # No need to log periodic cleaning
+            logger.info(f"Cleaning MAC table for {slot=}")
         now = time.monotonic()
         replacement_map = dict()
         for mac_source, (mac, interface, timestamp_expiry) in self.mapping.items():

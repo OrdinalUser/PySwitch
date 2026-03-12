@@ -91,6 +91,7 @@ class Core(BaseModel):
     inteface_buffer: int = 32
     interface_drain_s: float = 0.05
     dedup_last_frames: int = 64
+    wmi_delay_s: int = 1
 
 class Metrics(BaseModel):
     throughput_buffer_size: int = 100

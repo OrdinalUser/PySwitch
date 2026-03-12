@@ -1,3 +1,4 @@
+from __future__ import annotations # debugger must have for odd reasons
 from PySwitch.common import List, Deque, Optional, Queue, Tuple, StrEnum, DefaultDict, NamedTuple
 from PySwitch.network.frame import Frame, Protocols
 from dataclasses import dataclass, field
@@ -76,7 +77,7 @@ class MediaType(StrEnum):
         else: return MediaType.Unknown
 
 class Physical:
-    @dataclass
+    @dataclass(slots=True)
     class Interface:
         name: str           # Scapy iface identifier (on Windows: GUID path)
         description: str    # Human-readable NIC name
@@ -90,6 +91,7 @@ class Physical:
             return f"{self.description} [{self.mac}] {self.ip}"
 
         def IsConnected(self) -> bool:
+            """Unreliable and slow, prefer the Virtual.Interface.connected property"""
             import winreg, psutil # type: ignore
             # scapy description = adapter model; psutil keys = Windows friendly name.
             # Bridge via GUID → registry → friendly name so we always hit the right NIC.
@@ -145,7 +147,7 @@ class Statistics:
         self.processed = Deque()
         self.counts = DefaultDict(int)
 
-@dataclass
+@dataclass(slots=True)
 class InterfaceMetrics:
     """Holds statistics over the entire interface, both for in and out"""
     ingress: Statistics
@@ -157,7 +159,7 @@ class InterfaceMetrics:
         self.egress.Clear()
 
 class Virtual:
-    @dataclass
+    @dataclass(slots=True)
     class Interface:
         physical:      Optional[Physical.Interface]
         metrics:       InterfaceMetrics
@@ -165,7 +167,9 @@ class Virtual:
         slot: int
         batch_size: int
         batch_latency: float
-        record_started: Optional[float] = field(default=None, init=False, repr=False)
+        record_started:   Optional[float] = field(default=None, init=False, repr=False)
+        connected:        Optional[bool]  = field(default=None, init=False, repr=False)
+        disconnected_at:  Optional[float] = field(default=None, init=False, repr=False)
 
         _last_batch_s: float = field(default=0.0, init=False, repr=False)
         _batch: List[Tuple[InterfaceData, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
@@ -198,6 +202,8 @@ class Virtual:
             self._send_queue = Queue()
             self._stop_event.clear()
             self.record_started = time.time()
+            self.connected = True if self.physical.IsConnected() else None # used as a fallback for already connected devices
+            self.disconnected_at = None
             self._thread      = threading.Thread(target=self._capture,     daemon=True)
             self._send_thread = threading.Thread(target=self._send_worker, daemon=True)
             self._thread.start()
@@ -206,6 +212,8 @@ class Virtual:
         def Stop(self) -> None:
             """Signals both threads to stop and releases the physical interface."""
             self.record_started = None
+            self.connected = None
+            self.disconnected_at = None
             self._stop_event.set()
             self._send_queue.put(None)  # wake the send thread so it exits promptly
             self._send_thread = None
@@ -228,14 +236,18 @@ class Virtual:
                     if_data = self._send_queue.get()
                 except Empty:
                     continue
+                
                 if if_data is None:  # Stop() sentinel
                     break
+                
                 handle = self._pcap_send_handle
                 if handle is None:
                     continue
+                
                 rc = wpcap.pcap_sendpacket(handle, if_data.data, len(if_data.data))
                 if rc != 0:
-                    logger.warning("pcap_sendpacket failed on slot %d", self.slot)
+                    # Silently drop the packet as we're not connected anymore
+                    logger.debug("pcap_sendpacket failed on slot %d", self.slot)
                 else:
                     self.metrics.egress.AddFrame(if_data)
 

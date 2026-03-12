@@ -1,4 +1,3 @@
-import dataclasses
 import time
 
 import PySwitch.network as network
@@ -258,7 +257,9 @@ class InterfaceSlotCard(SimpleCardWidget):
         elapsed = f"Elapsed time {_fmt_elapsed(iface.record_started)}" if iface.record_started is not None else ""
         self._elapsed_label.setText(elapsed)
 
-        self._status_dot.setStyleSheet(self._DOT_CONNECTED if p.IsConnected() else self._DOT_DISCONNECTED)
+        # connected = iface.connected if iface.connected is not None else p.IsConnected()
+        connected = iface.connected
+        self._status_dot.setStyleSheet(self._DOT_CONNECTED if connected else self._DOT_DISCONNECTED)
         self._stats_btn.setEnabled(True)
         self._update_stats(iface.metrics)
 
@@ -495,47 +496,106 @@ class MACTableView(QWidget):
 
 # ── Services ──────────────────────────────────────────────────────────────────
 
-class _ServiceSettingsCard(SimpleCardWidget):
-    """Auto-generates a form from a service's dataclass settings via __dataclass_fields__."""
+_SEVERITY_OPTIONS: list[tuple[str, int]] = [
+    ("Critical", 2),
+    ("Error",    3),
+    ("Warning",  4),
+    ("Info",     6),
+]
 
-    def __init__(self, service_name: str, service_obj, parent=None):
+
+class _SyslogSettingsCard(SimpleCardWidget):
+    def __init__(self, service: "svc.Syslog", parent=None):
         super().__init__(parent)
-        self._service = service_obj
+        self._service = service
+        s = service.settings
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
+        root.setContentsMargins(16, 14, 16, 22)
         root.setSpacing(10)
-        root.addWidget(StrongBodyLabel(service_name))
+        root.addWidget(StrongBodyLabel("Syslog", self))
 
-        for field_name in service_obj.settings.__dataclass_fields__:
-            value = getattr(service_obj.settings, field_name)
+        LBL_W = 90
 
-            row = QHBoxLayout()
-            row.setSpacing(12)
+        # Enabled — applied immediately, no socket involved
+        row = QHBoxLayout()
+        lbl = BodyLabel("Enabled", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._enabled = SwitchButton(self)
+        self._enabled.setChecked(s.enabled)
+        self._enabled.checkedChanged.connect(lambda v: setattr(self._service.settings, 'enabled', v))
+        row.addWidget(lbl)
+        row.addStretch()
+        row.addWidget(self._enabled)
+        root.addLayout(row)
 
-            lbl = BodyLabel(field_name.replace('_', ' ').title())
-            lbl.setMinimumWidth(60)
-            row.addWidget(lbl)
+        # Server IP
+        row = QHBoxLayout()
+        lbl = BodyLabel("Server IP", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._server_ip = LineEdit(self)
+        self._server_ip.setText(s.server_ip)
+        self._server_ip.setPlaceholderText("e.g. 192.168.1.100")
+        row.addWidget(lbl)
+        row.addWidget(self._server_ip, stretch=1)
+        root.addLayout(row)
 
-            if isinstance(value, bool):
-                w = SwitchButton()
-                w.setChecked(value)
-                w.checkedChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
-            elif isinstance(value, int):
-                w = SpinBox()
-                w.setRange(1, 65535)
-                w.setValue(value)
-                w.valueChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
-            else:
-                w = LineEdit()
-                w.setText(str(value))
-                w.textChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
+        # Port
+        row = QHBoxLayout()
+        lbl = BodyLabel("Port", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._port = SpinBox(self)
+        self._port.setRange(1, 65535)
+        self._port.setValue(s.port)
+        row.addWidget(lbl)
+        row.addWidget(self._port, stretch=1)
+        root.addLayout(row)
 
-            row.addWidget(w, stretch=1)
-            root.addLayout(row)
+        # Source IP
+        row = QHBoxLayout()
+        lbl = BodyLabel("Source IP", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._source_ip = LineEdit(self)
+        self._source_ip.setText(s.source_ip)
+        self._source_ip.setPlaceholderText("Leave empty for auto")
+        row.addWidget(lbl)
+        row.addWidget(self._source_ip, stretch=1)
+        root.addLayout(row)
+
+        # Min severity
+        row = QHBoxLayout()
+        lbl = BodyLabel("Min Severity", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._severity = ComboBox(self)
+        self._severity_values = [val for _, val in _SEVERITY_OPTIONS]
+        for label, _ in _SEVERITY_OPTIONS:
+            self._severity.addItem(label)
+        for i, val in enumerate(self._severity_values):
+            if val == s.severity:
+                self._severity.setCurrentIndex(i)
+                break
+        row.addWidget(lbl)
+        row.addWidget(self._severity, stretch=1)
+        root.addLayout(row)
+
+        # Status + button
+        self._status = BodyLabel("", self)
+        root.addSpacing(4)
+        root.addWidget(self._status)
+        self._apply_btn = PrimaryPushButton("Test && Apply", self)
+        self._apply_btn.clicked.connect(self._on_apply)
+        root.addWidget(self._apply_btn)
 
         root.addStretch()
 
+    def _on_apply(self) -> None:
+        error = self._service.test_and_apply(
+            server_ip = self._server_ip.text().strip(),
+            source_ip = self._source_ip.text().strip(),
+            port      = self._port.value(),
+            severity  = self._severity_values[self._severity.currentIndex()],
+        )
+        self._status.setText(error or "Settings applied.")
 
 class Services(QWidget):
     def __init__(self, parent=None):
@@ -546,7 +606,6 @@ class Services(QWidget):
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(16)
 
-        # Sidebar
         sidebar = QWidget(self)
         sidebar.setFixedWidth(140)
         sidebar_layout = QVBoxLayout(sidebar)
@@ -557,11 +616,11 @@ class Services(QWidget):
 
         self._stack = QStackedWidget(self)
 
-        # Discover services that expose a dataclass settings object
-        for svc_type, svc_obj in svc.Service.All().items():
-            if not (hasattr(svc_obj, 'settings') and dataclasses.is_dataclass(svc_obj.settings)):
+        for svc_type, _ in svc.Service.All().items():
+            if svc_type is svc.Syslog:
+                card = _SyslogSettingsCard(svc.Service.Get(svc.Syslog), self)
+            else:
                 continue
-            card = _ServiceSettingsCard(svc_type.__name__, svc_obj, self)
             btn = TransparentPushButton(svc_type.__name__, sidebar)
             btn.clicked.connect(lambda checked=False, p=card: self._stack.setCurrentWidget(p))
             sidebar_layout.addWidget(btn)

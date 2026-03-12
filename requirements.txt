@@ -8,4 +8,3 @@ watchdog
 psutil
 types-psutil
 wmi
-pywin32

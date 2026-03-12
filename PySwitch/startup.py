@@ -78,7 +78,7 @@ class _CallbackHandler(logging.Handler):
         msg = self.format(record)
         self.callback(record, msg)
 
-def add_callback_handler(callback: "Callable[[logging.LogRecord, str], None]") -> None:
+def add_callback_handler(callback: Callable[[logging.LogRecord, str], None]) -> None:
     """Adds a callback handler to the root logger."""
     root = logging.getLogger()
     handler = _CallbackHandler(callback)

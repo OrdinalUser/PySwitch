@@ -9,12 +9,9 @@ if __name__ == "__main__":
 
     # prepare core before application start to avoid surpises
     import PySwitch.network as network
-    core = network.Core.Get()
     syslog_service = network.service.Service.Get(network.service.Syslog)
     startup.add_callback_handler(syslog_service.logging_callback)
-    import logging
-    logger = logging.getLogger()
-    logger.info("Initialized core")
+    core = network.Core.Get()
 
     import io, contextlib
     with contextlib.redirect_stdout(io.StringIO()):
