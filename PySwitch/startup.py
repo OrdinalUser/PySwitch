@@ -70,15 +70,15 @@ def add_file_handler(log_file: Path) -> None:
 
 class _CallbackHandler(logging.Handler):
     """Calls a user-provided callback with formatted log records."""
-    def __init__(self, callback):
+    def __init__(self, callback: "Callable[[logging.LogRecord, str], None]"):
         super().__init__()
         self.callback = callback
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
-        self.callback(msg)
+        self.callback(record, msg)
 
-def add_callback_handler(callback: Callable[[str], None]) -> None:
+def add_callback_handler(callback: "Callable[[logging.LogRecord, str], None]") -> None:
     """Adds a callback handler to the root logger."""
     root = logging.getLogger()
     handler = _CallbackHandler(callback)

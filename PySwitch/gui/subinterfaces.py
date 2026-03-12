@@ -1,6 +1,8 @@
+import dataclasses
 import time
 
 import PySwitch.network as network
+import PySwitch.network.service as svc
 import PySwitch.startup as startup
 from PySwitch.common import List, Tuple, Configuration
 
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QVBoxLayout,
     QGridLayout,
+    QStackedWidget,
     QWidget,
     QLabel,
     QPlainTextEdit,
@@ -21,9 +24,12 @@ from PySide6.QtGui import QFont
 
 from qfluentwidgets import ( # type: ignore
     ComboBox,
+    LineEdit,
     PushButton,
     PrimaryPushButton,
     TransparentPushButton,
+    SpinBox,
+    SwitchButton,
     SimpleCardWidget,
     MessageBoxBase,
     SubtitleLabel,
@@ -485,3 +491,85 @@ class MACTableView(QWidget):
     def _on_clear(self) -> None:
         self._core.ClearMac()
         self._refresh()
+
+
+# ── Services ──────────────────────────────────────────────────────────────────
+
+class _ServiceSettingsCard(SimpleCardWidget):
+    """Auto-generates a form from a service's dataclass settings via __dataclass_fields__."""
+
+    def __init__(self, service_name: str, service_obj, parent=None):
+        super().__init__(parent)
+        self._service = service_obj
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+        root.addWidget(StrongBodyLabel(service_name))
+
+        for field_name in service_obj.settings.__dataclass_fields__:
+            value = getattr(service_obj.settings, field_name)
+
+            row = QHBoxLayout()
+            row.setSpacing(12)
+
+            lbl = BodyLabel(field_name.replace('_', ' ').title())
+            lbl.setMinimumWidth(60)
+            row.addWidget(lbl)
+
+            if isinstance(value, bool):
+                w = SwitchButton()
+                w.setChecked(value)
+                w.checkedChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
+            elif isinstance(value, int):
+                w = SpinBox()
+                w.setRange(1, 65535)
+                w.setValue(value)
+                w.valueChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
+            else:
+                w = LineEdit()
+                w.setText(str(value))
+                w.textChanged.connect(lambda v, fn=field_name: setattr(self._service.settings, fn, v))
+
+            row.addWidget(w, stretch=1)
+            root.addLayout(row)
+
+        root.addStretch()
+
+
+class Services(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Sub.Services")
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(16)
+
+        # Sidebar
+        sidebar = QWidget(self)
+        sidebar.setFixedWidth(140)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(4)
+        sidebar_layout.addWidget(StrongBodyLabel("Services"))
+        sidebar_layout.addSpacing(4)
+
+        self._stack = QStackedWidget(self)
+
+        # Discover services that expose a dataclass settings object
+        for svc_type, svc_obj in svc.Service.All().items():
+            if not (hasattr(svc_obj, 'settings') and dataclasses.is_dataclass(svc_obj.settings)):
+                continue
+            card = _ServiceSettingsCard(svc_type.__name__, svc_obj, self)
+            btn = TransparentPushButton(svc_type.__name__, sidebar)
+            btn.clicked.connect(lambda checked=False, p=card: self._stack.setCurrentWidget(p))
+            sidebar_layout.addWidget(btn)
+            self._stack.addWidget(card)
+
+        sidebar_layout.addStretch()
+        outer.addWidget(sidebar)
+        outer.addWidget(self._stack, stretch=1)
+
+        if self._stack.count():
+            self._stack.setCurrentIndex(0)

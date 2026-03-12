@@ -20,11 +20,13 @@ class Application(FluentWindow):
         self.sniffer    = Subinterfaces.PhysicalSniffer(self)
         self.logs       = Subinterfaces.Logs(self)
         self.mac_view   = Subinterfaces.MACTableView(self)
+        self.services   = Subinterfaces.Services(self)
 
         self.addSubInterface(self.interfaces, FluentIcon.HOME,              "Interfaces")
         self.addSubInterface(self.sniffer,    FluentIcon.WIFI,              "NIC Sniffer")
         self.addSubInterface(self.logs,       FluentIcon.DEVELOPER_TOOLS,   "Logs")
         self.addSubInterface(self.mac_view,   FluentIcon.CALENDAR,          "MAC Table")
+        self.addSubInterface(self.services,   FluentIcon.APPLICATION,       "Services")
 
     @staticmethod
     def Run() -> int:
