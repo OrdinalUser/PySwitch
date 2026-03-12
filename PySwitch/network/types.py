@@ -79,7 +79,7 @@ class Ethernet2:
     payload: memoryview # 42-1500B
     frame_check_sequence: int # 4B
 
-class IP4_Header:
+class IP4:
     # Reference::
     # https://en.wikipedia.org/wiki/IPv4
     # https://en.wikipedia.org/wiki/List_of_IP_protocol_numbers

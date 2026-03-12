@@ -3,3 +3,4 @@ from .common import GetAllAvailableNICs
 from .sniffer import Sniffer
 from .core import Core, Interfaces
 from .frame import Frame, ProtocolParser, Protocols
+from .service import Service, ServiceImplementation, Arp, Syslog

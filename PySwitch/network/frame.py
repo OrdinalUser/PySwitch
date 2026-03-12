@@ -1,5 +1,5 @@
 from PySwitch.common import Dict, StrEnum, Any, Optional, Callable, TypeAlias, Tuple, Cast, OrderedDict, Protocol, runtime_checkable
-from PySwitch.network.types import MAC, IPv4, Ethernet2, IP4_Header, ARP, UDP, TCP, ICMP, HTTP
+from PySwitch.network.types import MAC, IPv4, Ethernet2, IP4, ARP, UDP, TCP, ICMP, HTTP
 import struct
 
 class Protocols(StrEnum):
@@ -96,15 +96,15 @@ class ArpParser(ProtocolParser, protocol=Protocols.Arp):
 
 # === L3 Parsing =============
 class IPv4Parser(ProtocolParser, protocol=Protocols.IPv4):
-    _IP4_PROTOCOL_TO_PROTOCOLS: Dict[IP4_Header.Protocol, Protocols] = {
-        IP4_Header.Protocol.UDP: Protocols.Udp,
-        IP4_Header.Protocol.TCP: Protocols.Tcp,
-        IP4_Header.Protocol.ICMP: Protocols.Icmp
+    _IP4_PROTOCOL_TO_PROTOCOLS: Dict[IP4.Protocol, Protocols] = {
+        IP4.Protocol.UDP: Protocols.Udp,
+        IP4.Protocol.TCP: Protocols.Tcp,
+        IP4.Protocol.ICMP: Protocols.Icmp
     }
     _IP_STRUCT = struct.Struct("!BBHHHBBH4s4s")
 
     @staticmethod
-    def parse(data: memoryview) -> Tuple[IP4_Header, Optional[Tuple[Protocols, memoryview]]]:
+    def parse(data: memoryview) -> Tuple[IP4, Optional[Tuple[Protocols, memoryview]]]:
         ver_ihl, dscp_ecn, total_length, identification, flags_fragment_offset, ttl, protocol, checksum, src, dest = IPv4Parser._IP_STRUCT.unpack_from(data)
         
         # Extract version (upper 4 bits) and IHL (lower 4 bits)
@@ -125,20 +125,20 @@ class IPv4Parser(ProtocolParser, protocol=Protocols.IPv4):
         # Calculate header size from IHL (IHL is in 32-bit words, so multiply by 4)
         ip_header_size = ip4_ihl * 4
         
-        ip4 = IP4_Header()
+        ip4 = IP4()
         ip4.version = ip4_version
         ip4.ihl = ip4_ihl
         ip4.dscp = ip4_dscp
         ip4.ecn = ip4_ecn
         ip4.total_length = total_length
         ip4.identification = identification
-        ip4.flags = IP4_Header.Flags()
+        ip4.flags = IP4.Flags()
         ip4.flags.reserved = ip4_reserved
         ip4.flags.dont_fragment = ip4_df
         ip4.flags.more_fragments = ip4_mf
         ip4.fragment_offset = ip4_frag_offset
         ip4.time_to_live = ttl
-        ip4.protocol = IP4_Header.Protocol(protocol)
+        ip4.protocol = IP4.Protocol(protocol)
         ip4.header_checksum = checksum
         ip4.source = IPv4.from_bytes(src)
         ip4.destination = IPv4.from_bytes(dest)
@@ -261,11 +261,11 @@ class Frame:
         return self.protocol_stack.get(Protocols.Ethernet2, None)
     
     @property
-    def arp(self):
+    def arp(self) -> Optional[ARP]:
         return self.protocol_stack.get(Protocols.Arp, None)
     
     @property
-    def ipv4(self) -> Optional[IP4_Header]:
+    def ipv4(self) -> Optional[IP4]:
         return self.protocol_stack.get(Protocols.IPv4, None)
     
     @property

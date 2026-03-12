@@ -3,6 +3,7 @@ import logging
 import queue
 import sys
 from pathlib import Path
+from typing import Callable
 
 _mutex = None  # keep reference alive for process lifetime
 _log_queue: queue.SimpleQueue = queue.SimpleQueue()
@@ -15,7 +16,6 @@ class _QueueHandler(logging.Handler):
 
 def get_log_queue() -> queue.SimpleQueue:
     return _log_queue
-
 
 def ensure_singleton() -> None:
     """Prevent more than one instance from running. Exits immediately if another is found."""
@@ -67,3 +67,24 @@ def add_file_handler(log_file: Path) -> None:
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
+
+class _CallbackHandler(logging.Handler):
+    """Calls a user-provided callback with formatted log records."""
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        self.callback(msg)
+
+def add_callback_handler(callback: Callable[[str], None]) -> None:
+    """Adds a callback handler to the root logger."""
+    root = logging.getLogger()
+    handler = _CallbackHandler(callback)
+    fmt = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(fmt)
+    root.addHandler(handler)

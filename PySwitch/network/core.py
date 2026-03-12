@@ -5,10 +5,12 @@ from PySwitch.network.frame import Frame
 from PySwitch.network.common import GetAllAvailableNICs
 from PySwitch.network.types import MAC, Ethernet2, IPv4
 from PySwitch.network.mac_table import MACTable
+import PySwitch.network.service as Service
 
 from threading import Thread, Event
 from queue import Empty
 import time
+import asyncio
 
 import logging
 logger = logging.getLogger(__name__)
@@ -115,6 +117,8 @@ class Core:
     stop_event: Event
     
     processed_frames: BoundedSet
+    services: Service.Service
+    event_loop: asyncio.AbstractEventLoop
 
     @staticmethod
     def Get() -> Core:
@@ -129,16 +133,34 @@ class Core:
         instance.configuration = Configuration.Get()
         
         instance.mac_table = MACTable()
-        instance.interfaces = Interfaces(configuration=instance.configuration, ingress_queue=instance.ingress_queue, on_change=instance.OnInterfaceChange, mac_table=instance.mac_table)
+        instance.interfaces = Interfaces(
+            configuration=instance.configuration,
+            ingress_queue=instance.ingress_queue,
+            on_change=instance.OnInterfaceChange,
+            mac_table=instance.mac_table
+        )
+        
         instance.OnInterfaceChange()
+        instance.processed_frames = BoundedSet(instance.configuration.static.core.dedup_last_frames)
+        
+        # Always send software traffic from the first interface
+        def on_service_frame_send(data: bytes):
+            # if_data = InterfaceData(data, frame.from_bytes(data))
+            # instance.ingress_queue.put([(if_data, instance.interfaces.interfaces[0])])
+            print(f"Sending software frame {str(data, encoding='ascii')}")
+        
+        instance.event_loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(instance.event_loop) # maybe not override the global ones to not mess with PySide
+        instance.services = Service.Service.Initialize(
+            on_data_send=on_service_frame_send,
+            event_loop=instance.event_loop
+        )
         
         instance.stop_event = Event()
         instance.core_thread = Thread(daemon=True, target=instance.FrameHandler)
         instance.core_thread.start()
         instance.clean_thread = Thread(daemon=True, target=instance.CleanHandler)
         instance.clean_thread.start()
-        
-        instance.processed_frames = BoundedSet(instance.configuration.static.core.dedup_last_frames)
         
         return instance
     
