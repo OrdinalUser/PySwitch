@@ -18,18 +18,15 @@ def get_log_queue() -> queue.SimpleQueue:
     return _log_queue
 
 def ensure_singleton() -> None:
-    """Prevent more than one instance from running. Exits immediately if another is found."""
+    """Prevent more than one instance from running. Brings the existing window to the foreground and exits silently if another is found."""
     global _mutex
     _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "Global\\PySwitch_NetworkSwitch")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            "PySwitch is already running.",
-            "PySwitch",
-            0x10,  # MB_ICONERROR
-        )
-        sys.exit(1)
-
+        hwnd = ctypes.windll.user32.FindWindowW(None, "PySwitch")
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        sys.exit(0)
 
 def setup_logging(log_file: Path | None = None) -> None:
     """Configure root logger. Call once at startup before anything else."""

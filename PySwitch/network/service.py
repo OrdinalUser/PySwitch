@@ -2,8 +2,9 @@ import datetime
 import logging
 import socket
 from dataclasses import dataclass
-from PySwitch.common import Dict, Cast, ClassVar, TypeVar, Type
+from PySwitch.common import Dict, Cast, ClassVar, TypeVar, Type, Optional, Callable
 
+import os
 import logging
 logger = logging.getLogger(__name__)
 
@@ -45,49 +46,39 @@ _SYSLOG_FACILITY = 1  # LOG_USER
 class SyslogSettings:
     server_ip: str = "127.0.0.1"
     port: int      = 514
-    source_ip: str = ""           # empty = let OS pick the source address
-    enabled: bool  = True
+    source_ip: str = "127.0.0.1"
+    enabled: bool  = False
     severity: int  = _SYSLOG_SEVERITY[logging.INFO]
 
 class Syslog(Service):
-    _sock: socket.socket
-    _bound_ip: str
     settings: SyslogSettings
     hostname: str
+    pid: int
+    _send_fn: Optional[Callable[[bytes, SyslogSettings], None]]
 
     def __init__(self) -> None:
-        self._bound_ip = ""
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.settings = SyslogSettings()
         self.hostname = socket.gethostname()
+        self.pid = os.getpid()
+        self._send_fn = None
+
+    def set_send_fn(self, fn: Callable[[bytes, SyslogSettings], None]) -> None:
+        self._send_fn = fn
 
     def _format(self, priority: int, msg: str) -> bytes:
         """RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG"""
         ts = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
-        return f"<{priority}>1 {ts} {self.hostname} PySwitch - - - {msg}".encode("utf-8")
+        return f"<{priority}>1 {ts} {self.hostname} PySwitch {self.pid} - - {msg}".encode("utf-8")
 
-    def _ensure_socket(self) -> None:
-        """Recreate and rebind the socket if source_ip has changed."""
-        target = self.settings.source_ip
-        if self._bound_ip == target:
-            return
-        try:
-            self._sock.close()
-        except Exception:
-            pass
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if target:
-            self._sock.bind((target, 0))
-        self._bound_ip = target
-
-    def _send(self, data: bytes) -> None:
+    def _send(self, data: bytes, settings: SyslogSettings) -> None:
         """Send pre-formatted bytes to the configured server, logging failures at DEBUG."""
-        self._ensure_socket()
-        try:
-            self._sock.sendto(data, (self.settings.server_ip, self.settings.port))
-        except Exception as e:
-            # This is why we don't support debug level in the syslog, would cause a circular mess
-            logging.debug("Couldn't send syslog %s -> %s:%d: %s", self.settings.source_ip, self.settings.server_ip, self.settings.port, e)
+        if self._send_fn is not None:
+            try:
+                self._send_fn(data, settings)
+            except Exception as e:
+                msg = f"Raw syslog send failed: {e}"
+                logger.debug(msg)
+                raise RuntimeError(msg)
 
     def logging_callback(self, record: logging.LogRecord, _msg: str) -> None:
         """Callback function meant to take data from Python logging module and retransmit over Syslog format"""
@@ -96,7 +87,10 @@ class Syslog(Service):
         severity = _SYSLOG_SEVERITY.get(record.levelno, _SYSLOG_SEVERITY[logging.INFO])
         if severity > self.settings.severity:
             return
-        self._send(self._format(_SYSLOG_FACILITY * 8 + severity, f"{record.name}: {record.getMessage()}"))
+        try:
+            self._send(self._format(_SYSLOG_FACILITY * 8 + severity, f"{record.name}: {record.getMessage()}"), self.settings)
+        except Exception as e:
+            logger.debug(e)
 
     def test_and_apply(self, server_ip: str, source_ip: str, port: int, severity: int) -> str | None:
         """Validates, tests sending - not connection, then applies settings if os doesn't complain. Returns None on success, error string on failure."""
@@ -109,13 +103,17 @@ class Syslog(Service):
                 socket.inet_aton(source_ip)
             except OSError:
                 return f"Invalid source IP: {source_ip!r}"
+        
+        temp_settings = SyslogSettings(
+            server_ip=server_ip,
+            port=port,
+            source_ip=source_ip
+        )
+        
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as test_sock:
-                if source_ip:
-                    test_sock.bind((source_ip, 0))
-                test_sock.sendto(self._format(_SYSLOG_FACILITY * 8 + severity, "Syslog test and set hello"), (server_ip, port))
+            self._send(self._format(_SYSLOG_FACILITY * 8 + severity, "Syslog test and set hello"), temp_settings)
         except Exception as e:
-            return f"Test failed: {e}"
+            return str(e)
         
         self.settings.server_ip = server_ip
         self.settings.source_ip = source_ip

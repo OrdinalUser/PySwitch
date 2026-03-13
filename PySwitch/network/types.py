@@ -1,5 +1,15 @@
 from PySwitch.common import IntEnum, Optional, NamedTuple
 from enum import IntFlag, StrEnum
+import struct
+
+def _ip_checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b'\x00'
+    words = struct.unpack('!%dH' % (len(data) // 2), data)
+    s = sum(words)
+    while s >> 16:
+        s = (s & 0xFFFF) + (s >> 16)
+    return ~s & 0xFFFF
 
 class MAC:
     data: bytes
@@ -18,7 +28,10 @@ class MAC:
 
     def to_str(self, delim: str = ':') -> str:
         return delim.join([f"{octet:02x}" for octet in self.data[:6]])
-    
+
+    def to_bytes(self) -> bytes:
+        return self.data[:6]
+
     @classmethod
     def from_str(cls, mac_address: str, delim: str = ':') -> MAC:
         mac = cls()
@@ -54,7 +67,10 @@ class IPv4:
 
     def to_str(self) -> str:
         return ".".join([f"{octet:}" for octet in self.data[:4]])
-    
+
+    def to_bytes(self) -> bytes:
+        return self.data[:4]
+
     @classmethod
     def from_str(cls, ip_address: str) -> IPv4:
         ip = cls()
@@ -78,6 +94,9 @@ class Ethernet2:
     ether_type: int # 2B
     payload: memoryview # 42-1500B
     frame_check_sequence: int # 4B
+
+    def to_bytes(self, payload: bytes) -> bytes:
+        return self.mac_destination.to_bytes() + self.mac_source.to_bytes() + struct.pack('!H', self.ether_type) + payload
 
 class IP4:
     # Reference::
@@ -114,6 +133,29 @@ class IP4:
     options: memoryview # 0-320 bits, padded to multiple of 32bits
     payload: memoryview # the rest of the packet
 
+    def to_bytes(self, payload: bytes) -> bytes:
+        flags_frag = 0
+        try:
+            if self.flags.dont_fragment:  flags_frag |= 0x4000
+            if self.flags.more_fragments: flags_frag |= 0x2000
+        except AttributeError:
+            pass
+        flags_frag |= (getattr(self, 'fragment_offset', 0) & 0x1FFF)
+        header = struct.pack('!BBHHHBBH4s4s',
+            (4 << 4) | 5,
+            (getattr(self, 'dscp', 0) << 2) | getattr(self, 'ecn', 0),
+            20 + len(payload),
+            getattr(self, 'identification', 0),
+            flags_frag,
+            self.time_to_live,
+            int(self.protocol),
+            0,
+            self.source.to_bytes(),
+            self.destination.to_bytes(),
+        )
+        cs = _ip_checksum(header)
+        return header[:10] + struct.pack('!H', cs) + header[12:] + payload
+
 class ARP:
     # Reference: https://en.wikipedia.org/wiki/Address_Resolution_Protocol
     class ProtocolType(IntEnum):
@@ -138,6 +180,9 @@ class UDP:
     length: int # 2B
     checksum: int # 2B
     payload: memoryview # the rest
+
+    def to_bytes(self, payload: bytes) -> bytes:
+        return struct.pack('!HHHH', self.source_port, self.destination_port, 8 + len(payload), 0) + payload
 
 class TCP:
     # Reference: https://en.wikipedia.org/wiki/Transmission_Control_Protocol

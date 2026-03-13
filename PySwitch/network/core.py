@@ -6,6 +6,7 @@ from PySwitch.network.common import GetAllAvailableNICs
 from PySwitch.network.types import MAC, Ethernet2, IPv4
 from PySwitch.network.mac_table import MACTable
 from PySwitch.network.frame import Frame
+from PySwitch.network.frame_builder import build_udp_frame, resolve_arp
 import PySwitch.network.service as Service
 
 from threading import Thread, Event
@@ -48,9 +49,9 @@ class Interfaces:
             raise ValueError(f"Invalid slot argument, provided {slot}, expected in range 0-{len(self.interfaces)-1}")
         if self.interfaces[slot].physical is None:
             raise ValueError(f"Slot {slot} is already empty")
+        logger.info(f"Unassigned interface {slot=}, removing {self.interfaces[slot]}")
         self.mac_table.Clean(slot)
         self.port_mapping.pop(self.interfaces[slot])
-        logger.info(f"Unassigned interface {slot=}, removing {self.interfaces[slot]}")
         self.interfaces[slot].Stop()
         self.interfaces[slot].ClearMetrics()
         self.on_change()
@@ -151,6 +152,7 @@ class Core:
         instance.clean_thread.start()
         instance.wmi_thread = Thread(daemon=True, target=instance._wmi_watch)
         instance.wmi_thread.start()
+        instance._setup_syslog_send()
 
         logger.critical("Initialized")
         return instance
@@ -278,9 +280,37 @@ class Core:
         
         return
 
-    def Send(self, data: bytes):
+    def _setup_syslog_send(self) -> None:
+        syslog = Service.Service.Get(Service.Syslog)
+        core = self
+
+        def _send_via_switch(payload: bytes, settings: Service.SyslogSettings) -> None:
+            src_iface = next(
+                (i for i in core.interfaces.interfaces if i.physical and i.connected),
+                None
+            )
+            if src_iface is None or src_iface.physical is None:
+                raise OSError("No active interface for raw syslog send")
+            src_mac = bytes(int(x, 16) for x in src_iface.physical.mac.split(':'))
+            dst_mac = resolve_arp(settings.server_ip, settings.source_ip or "")
+            raw = build_udp_frame(
+                src_mac=src_mac,
+                dst_mac=dst_mac,
+                src_ip=settings.source_ip or src_iface.physical.ip,
+                dst_ip=settings.server_ip,
+                src_port=0,
+                dst_port=settings.port,
+                payload=payload,
+            )
+            core.SendBytes(raw)
+
+        syslog.set_send_fn(_send_via_switch)
+
+    def SendBytes(self, data: bytes):
         if_data = InterfaceData(data=data, frame=Frame.from_bytes(data))
-        self.interfaces.SendVia(if_data, -1, -1)
+        eth = Cast(Ethernet2, if_data.frame.ethernet2)
+        destination_slot = self.mac_table.Get(eth.mac_destination)
+        self.interfaces.SendVia(if_data, -1, destination_slot)
 
     def ClearMac(self) -> None:
         logger.info("Clearing global MAC table")
@@ -292,5 +322,5 @@ class Core:
 
     def Shutdown(self) -> None:
         """Explicit shutdown"""
-        self.interfaces.Shutdown()
         logger.critical("Shutdown")
+        self.interfaces.Shutdown()

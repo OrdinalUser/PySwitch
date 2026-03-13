@@ -332,7 +332,7 @@ class Logs(QWidget):
 
         self._console = QPlainTextEdit(self)
         self._console.setReadOnly(True)
-        self._console.setFont(QFont("Consolas", 9))
+        self._console.setFont(QFont("Consolas", 10))
         self._console.setMaximumBlockCount(2000)  # cap lines so it never grows unbounded
 
         layout.addLayout(toolbar)
@@ -391,7 +391,7 @@ class PhysicalSniffer(QWidget):
         # Packet console
         self._console = QPlainTextEdit(self)
         self._console.setReadOnly(True)
-        self._console.setFont(QFont("Consolas", 9))
+        self._console.setFont(QFont("Consolas", 10))
         self._console.setPlaceholderText("Captured packets will appear here…")
 
         layout.addLayout(controls)
@@ -503,7 +503,6 @@ _SEVERITY_OPTIONS: list[tuple[str, int]] = [
     ("Info",     6),
 ]
 
-
 class _SyslogSettingsCard(SimpleCardWidget):
     def __init__(self, service: "svc.Syslog", parent=None):
         super().__init__(parent)
@@ -521,12 +520,25 @@ class _SyslogSettingsCard(SimpleCardWidget):
         row = QHBoxLayout()
         lbl = BodyLabel("Enabled", self)
         lbl.setMinimumWidth(LBL_W)
+        # This stupid thing sometimes dumps "QFont::setPointSize: Point size <= 0 (-1), must be greater than 0" into the stdout, no idea how to fix
+        # not even a QFont() with explicit point size fixes it
         self._enabled = SwitchButton(self)
         self._enabled.setChecked(s.enabled)
         self._enabled.checkedChanged.connect(lambda v: setattr(self._service.settings, 'enabled', v))
         row.addWidget(lbl)
         row.addStretch()
         row.addWidget(self._enabled)
+        root.addLayout(row)
+
+        # Source IP
+        row = QHBoxLayout()
+        lbl = BodyLabel("Source IP", self)
+        lbl.setMinimumWidth(LBL_W)
+        self._source_ip = LineEdit(self)
+        self._source_ip.setText(s.source_ip)
+        self._source_ip.setPlaceholderText("Leave empty for auto")
+        row.addWidget(lbl)
+        row.addWidget(self._source_ip, stretch=1)
         root.addLayout(row)
 
         # Server IP
@@ -549,17 +561,6 @@ class _SyslogSettingsCard(SimpleCardWidget):
         self._port.setValue(s.port)
         row.addWidget(lbl)
         row.addWidget(self._port, stretch=1)
-        root.addLayout(row)
-
-        # Source IP
-        row = QHBoxLayout()
-        lbl = BodyLabel("Source IP", self)
-        lbl.setMinimumWidth(LBL_W)
-        self._source_ip = LineEdit(self)
-        self._source_ip.setText(s.source_ip)
-        self._source_ip.setPlaceholderText("Leave empty for auto")
-        row.addWidget(lbl)
-        row.addWidget(self._source_ip, stretch=1)
         root.addLayout(row)
 
         # Min severity
