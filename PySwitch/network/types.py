@@ -90,7 +90,6 @@ class Ethernet2:
 
     mac_destination: MAC # 6B
     mac_source: MAC # 6B
-    tag: Optional[int] # 4B
     ether_type: int # 2B
     payload: memoryview # 42-1500B
     frame_check_sequence: int # 4B

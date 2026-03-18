@@ -43,11 +43,12 @@ class MACTable:
             logger.info(f"Cleaning MAC table for {slot=}")
         now = time.monotonic()
         replacement_map = dict()
+        future_map_expiry = now + self.configuration.live.core.mac_expiry_s
         for mac_source, (mac, interface, timestamp_expiry) in self.mapping.items():
             if interface.slot == slot: continue
             if interface.physical is None: continue
             if now < timestamp_expiry:
-                replacement_map[mac_source] = MACTable.Entry(mac, interface, timestamp_expiry)
+                replacement_map[mac_source] = MACTable.Entry(mac, interface, min(timestamp_expiry, future_map_expiry))
         self.mapping = replacement_map
     
     def ToList(self) -> List[MACTable.Entry]:

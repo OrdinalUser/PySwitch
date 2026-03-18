@@ -43,7 +43,6 @@ class Ethernet2Parser(ProtocolParser, protocol=Protocols.Ethernet2):
         0x0806: Protocols.Arp
     }
     _ETH_STRUCT = struct.Struct('!6s6sH')  # dst, src, type_or_tpid
-    _VLAN_TPID  = 0x8100
     @staticmethod
     def parse(data: memoryview) -> Tuple[Any, Optional[Tuple[Protocols, memoryview]]]:
         dst_b, src_b, type_or_tpid = Ethernet2Parser._ETH_STRUCT.unpack_from(data)
@@ -53,17 +52,8 @@ class Ethernet2Parser(ProtocolParser, protocol=Protocols.Ethernet2):
         mac_src = MAC(); mac_src.data = src_b
         eth.mac_destination = mac_dst
         eth.mac_source = mac_src
-
-        if type_or_tpid == Ethernet2Parser._VLAN_TPID:
-            # 802.1Q tag present: [TCI 2B][EtherType 2B] follow
-            tci, ether_type = struct.unpack_from('!HH', data, 14)
-            eth.tag        = tci & 0x0FFF  # bottom 12 bits = VLAN ID
-            eth.ether_type = ether_type
-            eth.payload    = data[18:] # normally, we would cut off another 4 bytes for frame check sequence..
-        else:
-            eth.tag        = None
-            eth.ether_type = type_or_tpid
-            eth.payload    = data[14:] # normally, we would cut off another 4 bytes for frame check sequence..
+        eth.ether_type = type_or_tpid
+        eth.payload    = data[14:] # normally, we would cut off another 4 bytes for frame check sequence..
 
         eth.frame_check_sequence = 0 # seems to be unsupported for software solutions
         # eth.frame_check_sequence = struct.unpack_from('!I', data, len(data) - 4)[0]

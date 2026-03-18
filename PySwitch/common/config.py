@@ -77,7 +77,7 @@ class _LiveFileHandler(FileSystemEventHandler):
         with _live_reload_lock:
             self._on_reload(new_live)
 
-        logger.info("Live config hot-reloaded from %s", self._filepath)
+        logger.warning("Live config hot-reloaded from %s", self._filepath)
 
 
 # ── Settings models ───────────────────────────────────────────────────────────
