@@ -20,11 +20,13 @@ class Application(FluentWindow):
         self.logs       = Subinterfaces.Logs(self)
         self.mac_view   = Subinterfaces.MACTableView(self)
         self.services   = Subinterfaces.Services(self)
+        self.config     = Subinterfaces.LiveConfigView(self)
 
         self.addSubInterface(self.interfaces, FluentIcon.HOME,              "Interfaces")
         self.addSubInterface(self.logs,       FluentIcon.DEVELOPER_TOOLS,   "Logs")
         self.addSubInterface(self.mac_view,   FluentIcon.CALENDAR,          "MAC Table")
         self.addSubInterface(self.services,   FluentIcon.APPLICATION,       "Services")
+        self.addSubInterface(self.config,     FluentIcon.SETTING,           "Live Config")
 
     @staticmethod
     def Run() -> int:

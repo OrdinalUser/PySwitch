@@ -3,7 +3,9 @@ import time
 import PySwitch.network as network
 import PySwitch.network.service as svc
 import PySwitch.startup as startup
-from PySwitch.common import List, Tuple, Configuration
+from PySwitch.common import List, Tuple, Configuration, Live, UnionType, Union
+
+from pydantic import BaseModel as _PydanticBase
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QAbstractItemView,
+    QDoubleSpinBox,
 )
 
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -403,7 +406,7 @@ class MACTableView(QWidget):
         for row, entry in enumerate(entries):
             remaining = max(0.0, entry.timestamp_expiration - now)
             self._table.setItem(row, 0, QTableWidgetItem(str(entry.mac)))
-            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name if entry.interface.physical else "Unknwon"))
+            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name if entry.interface.physical else "Unknown"))
             self._table.setItem(row, 2, QTableWidgetItem(str(entry.interface.slot)))
             self._table.setItem(row, 3, QTableWidgetItem(f"{remaining:.1f}"))
 
@@ -515,6 +518,7 @@ class _SyslogSettingsCard(SimpleCardWidget):
             severity  = self._severity_values[self._severity.currentIndex()],
         )
         self._status.setText(error or "Settings applied.")
+        QTimer.singleShot(3000, lambda: self._status.setText(""))
 
 class Services(QWidget):
     def __init__(self, parent=None):
@@ -551,3 +555,155 @@ class Services(QWidget):
 
         if self._stack.count():
             self._stack.setCurrentIndex(0)
+
+
+# ── Live Config ───────────────────────────────────────────────────────────────
+
+def _field_label(name: str) -> str:
+    return name.replace("_", " ").title()
+
+def _unwrap_annotation(annotation):
+    """Strip Optional/Union wrappers and return the bare type."""
+    origin = getattr(annotation, "__origin__", None)
+    if origin is UnionType or origin is Union:
+        args = [a for a in annotation.__args__ if a is not type(None)]
+        return args[0] if args else annotation
+    return annotation
+
+class LiveConfigView(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Sub.LiveConfig")
+        cfg = Configuration.Get()
+        self._filepath = cfg.env.config_directory / "live.toml"
+        self._widgets: dict[str, QWidget] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        card = SimpleCardWidget(self)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 22)
+        card_layout.setSpacing(10)
+        card_layout.addWidget(StrongBodyLabel("Live Configuration", card))
+
+        self._build_fields(Live, card, card_layout, prefix="")
+
+        card_layout.addSpacing(4)
+        self._status = BodyLabel("", card)
+        card_layout.addWidget(self._status)
+
+        btn_row = QHBoxLayout()
+        self._reload_btn = PushButton("Reload", card)
+        self._apply_btn  = PrimaryPushButton("Apply", card)
+        self._reload_btn.clicked.connect(self._load)
+        self._apply_btn.clicked.connect(self._on_apply)
+        btn_row.addStretch()
+        btn_row.addWidget(self._reload_btn)
+        btn_row.addWidget(self._apply_btn)
+        card_layout.addLayout(btn_row)
+        card_layout.addStretch()
+
+        layout.addWidget(card)
+        layout.addStretch()
+
+        self._load()
+
+    def _build_fields(self, model_cls, parent_widget, layout, prefix: str) -> None:
+        for field_name, field_info in model_cls.model_fields.items():
+            key = f"{prefix}.{field_name}" if prefix else field_name
+            ann = _unwrap_annotation(field_info.annotation)
+
+            if isinstance(ann, type) and issubclass(ann, _PydanticBase):
+                layout.addSpacing(4)
+                layout.addWidget(CaptionLabel(_field_label(field_name).upper(), parent_widget))
+                self._build_fields(ann, parent_widget, layout, prefix=key)
+                continue
+
+            widget = self._make_widget(ann, parent_widget)
+            if widget is None:
+                continue
+
+            row = QHBoxLayout()
+            lbl = BodyLabel(_field_label(field_name), parent_widget)
+            lbl.setMinimumWidth(190)
+            row.addWidget(lbl)
+            row.addWidget(widget, stretch=1)
+            layout.addLayout(row)
+            self._widgets[key] = widget
+
+    @staticmethod
+    def _make_widget(ann, parent) -> QWidget | None:
+        if ann is float:
+            sb = QDoubleSpinBox(parent)
+            sb.setRange(0.0, 1e9)
+            sb.setDecimals(2)
+            sb.setSingleStep(1.0)
+            return sb
+        if ann is int:
+            sb = SpinBox(parent)
+            sb.setRange(0, 1_000_000)
+            return sb
+        if ann is str:
+            return LineEdit(parent)
+        if ann is bool:
+            return SwitchButton(parent)
+        return None
+
+    def _set_values(self, model_cls, instance, prefix: str) -> None:
+        for field_name, field_info in model_cls.model_fields.items():
+            key = f"{prefix}.{field_name}" if prefix else field_name
+            ann = _unwrap_annotation(field_info.annotation)
+            value = getattr(instance, field_name)
+            if isinstance(ann, type) and issubclass(ann, _PydanticBase):
+                self._set_values(ann, value, prefix=key)
+                continue
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            if isinstance(widget, QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, SpinBox):
+                widget.setValue(int(value))
+            elif isinstance(widget, LineEdit):
+                widget.setText(str(value))
+            elif isinstance(widget, SwitchButton):
+                widget.setChecked(bool(value))
+
+    def _collect_values(self, model_cls, prefix: str) -> dict:
+        result = {}
+        for field_name, field_info in model_cls.model_fields.items():
+            key = f"{prefix}.{field_name}" if prefix else field_name
+            ann = _unwrap_annotation(field_info.annotation)
+            if isinstance(ann, type) and issubclass(ann, _PydanticBase):
+                result[field_name] = self._collect_values(ann, prefix=key)
+                continue
+            widget = self._widgets.get(key)
+            if widget is None:
+                continue
+            if isinstance(widget, QDoubleSpinBox):
+                result[field_name] = widget.value() # type: ignore
+            elif isinstance(widget, SpinBox):
+                result[field_name] = widget.value()
+            elif isinstance(widget, LineEdit):
+                result[field_name] = widget.text().strip()
+            elif isinstance(widget, SwitchButton):
+                result[field_name] = widget.isChecked()
+        return result
+
+    def _load(self) -> None:
+        self._set_values(Live, Configuration.Get().live, prefix="")
+        self._status.setText("")
+
+    def _on_apply(self) -> None:
+        from pydantic import ValidationError
+        try:
+            live = Live.model_validate(self._collect_values(Live, prefix=""))
+        except ValidationError as e:
+            self._status.setText(f"Invalid value: {e.errors()[0]['msg']}")
+            QTimer.singleShot(5000, lambda: self._status.setText(""))
+            return
+        live.Save(self._filepath)
+        self._status.setText("Saved — watcher will hot-reload.")
+        QTimer.singleShot(3000, lambda: self._status.setText(""))
