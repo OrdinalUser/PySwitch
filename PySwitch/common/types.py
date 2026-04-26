@@ -1,12 +1,14 @@
 from __future__ import annotations
+
+from pydantic import BaseModel
+
+import logging
+from dataclasses import dataclass  # kept for re-export
 from pathlib import Path
 from typing import ClassVar, Optional
 
-from pydantic import BaseModel
-from dataclasses import dataclass  # kept for re-export
-
-import logging
 logger = logging.getLogger(__name__)
+
 
 class Env(BaseModel):
     _instance: ClassVar[Env | None] = None
@@ -18,8 +20,9 @@ class Env(BaseModel):
         if Env._instance is not None:
             return Env._instance
         import dotenv
+
         env_filepath = dotenv.find_dotenv()
-        if env_filepath == '' or not Path(env_filepath).exists():
+        if env_filepath == "" or not Path(env_filepath).exists():
             logger.warning("No .env file found, using defaults")
         values = dotenv.dotenv_values()
         Env._instance = Env.model_validate(values).Prepare()

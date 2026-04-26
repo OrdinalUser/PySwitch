@@ -7,9 +7,9 @@
 ## "Compilation" & running
 
 - ensure a proper Python environment
-  - [uv](https://docs.astral.sh/uv/) (highly recommended) or use [pip venv](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/)
-  - install [requirements](./requirements.txt)
-- run the [main.py](./main.py) file via Python
+  - [uv](https://docs.astral.sh/uv/) (highly recommended)
+  - install requirements from the [pyproject](./pyproject.toml) file, `uv sync`
+- run the [main.py](./main.py), `uv run main.py`
 
 ## Required libraries and their usage
 

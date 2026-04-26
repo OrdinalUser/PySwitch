@@ -1,6 +1,6 @@
-from .interface import Physical, Virtual, Statistics, InterfaceMetrics
 from .common import GetAllAvailableNICs
-from .sniffer import Sniffer
 from .core import Core, Interfaces
 from .frame import Frame, ProtocolParser, Protocols
+from .interface import InterfaceMetrics, Physical, Statistics, Virtual
 from .service import Service, Syslog
+from .sniffer import Sniffer

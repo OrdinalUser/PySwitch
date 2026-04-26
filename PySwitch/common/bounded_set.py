@@ -1,5 +1,6 @@
 from collections import deque
 
+
 class BoundedSet:
     """Fixed-capacity set that evicts the oldest entry when full.
     Stores hashes only — does not hold references to the original items."""

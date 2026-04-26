@@ -8,8 +8,10 @@ from typing import Callable
 _mutex = None  # keep reference alive for process lifetime
 _log_queue: queue.SimpleQueue = queue.SimpleQueue()
 
+
 class _QueueHandler(logging.Handler):
     """Feeds formatted log records into _log_queue for the GUI to drain."""
+
     def emit(self, record: logging.LogRecord) -> None:
         _log_queue.put_nowait(self.format(record))
 
@@ -17,16 +19,20 @@ class _QueueHandler(logging.Handler):
 def get_log_queue() -> queue.SimpleQueue:
     return _log_queue
 
+
 def ensure_singleton() -> None:
     """Prevent more than one instance from running. Brings the existing window to the foreground and exits silently if another is found."""
     global _mutex
-    _mutex = ctypes.windll.kernel32.CreateMutexW(None, True, "Global\\PySwitch_NetworkSwitch")
+    _mutex = ctypes.windll.kernel32.CreateMutexW(
+        None, True, "Global\\PySwitch_NetworkSwitch"
+    )
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
         hwnd = ctypes.windll.user32.FindWindowW(None, "PySwitch")
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
         sys.exit(0)
+
 
 def setup_logging(log_file: Path | None = None) -> None:
     """Configure root logger. Call once at startup before anything else."""
@@ -65,8 +71,10 @@ def add_file_handler(log_file: Path) -> None:
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
 
+
 class _CallbackHandler(logging.Handler):
     """Calls a user-provided callback with formatted log records."""
+
     def __init__(self, callback: "Callable[[logging.LogRecord, str], None]"):
         super().__init__()
         self.callback = callback
@@ -74,6 +82,7 @@ class _CallbackHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
         self.callback(record, msg)
+
 
 def add_callback_handler(callback: Callable[[logging.LogRecord, str], None]) -> None:
     """Adds a callback handler to the root logger."""

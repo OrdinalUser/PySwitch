@@ -1,62 +1,84 @@
-from __future__ import annotations # debugger must have for odd reasons
-from PySwitch.common import List, Deque, Optional, Queue, Tuple, StrEnum, DefaultDict, NamedTuple
+from __future__ import annotations  # debugger must have for odd reasons
+
+from PySwitch.common import (
+    DefaultDict,
+    Deque,
+    List,
+    NamedTuple,
+    Optional,
+    Queue,
+    StrEnum,
+    Tuple,
+)
 from PySwitch.network.frame import Frame, Protocols
-from dataclasses import dataclass, field
 
 import ctypes
+import logging
 import threading
 import time
-import logging
+from dataclasses import dataclass, field
+
 
 class InterfaceData(NamedTuple):
     data: bytes
     frame: Frame
 
+
 logger = logging.getLogger(__name__)
 
 # ── wpcap.dll ctypes bindings ──────────────────────────────────────────────────
 
-PCAP_OPENFLAG_PROMISCUOUS     = 1
+PCAP_OPENFLAG_PROMISCUOUS = 1
 PCAP_OPENFLAG_NOCAPTURE_LOCAL = 4
-_PCAP_ERRBUF_SIZE             = 256
+_PCAP_ERRBUF_SIZE = 256
+
 
 class _PcapPkthdr(ctypes.Structure):
     # struct timeval uses 32-bit longs on Windows (LLP64), followed by caplen/len
     _fields_ = [
-        ("tv_sec",  ctypes.c_uint32),
+        ("tv_sec", ctypes.c_uint32),
         ("tv_usec", ctypes.c_uint32),
-        ("caplen",  ctypes.c_uint32),
-        ("len",     ctypes.c_uint32),
+        ("caplen", ctypes.c_uint32),
+        ("len", ctypes.c_uint32),
     ]
+
 
 def _load_wpcap() -> ctypes.CDLL:
     lib = ctypes.cdll.LoadLibrary("wpcap.dll")
 
     # pcap_t *pcap_open(source, snaplen, flags, read_timeout, auth, errbuf)
-    lib.pcap_open.restype  = ctypes.c_void_p
+    lib.pcap_open.restype = ctypes.c_void_p
     lib.pcap_open.argtypes = [
-        ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
-        ctypes.c_int,    ctypes.c_void_p, ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_char_p,
     ]
     # int pcap_next_ex(handle, **pkthdr, **data)
-    lib.pcap_next_ex.restype  = ctypes.c_int
+    lib.pcap_next_ex.restype = ctypes.c_int
     lib.pcap_next_ex.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.POINTER(_PcapPkthdr)),
         ctypes.POINTER(ctypes.c_char_p),
     ]
     # int pcap_sendpacket(handle, buf, size)
-    lib.pcap_sendpacket.restype  = ctypes.c_int
+    lib.pcap_sendpacket.restype = ctypes.c_int
     lib.pcap_sendpacket.argtypes = [
-        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_int,
     ]
     # void pcap_close(handle)
-    lib.pcap_close.restype  = None
+    lib.pcap_close.restype = None
     lib.pcap_close.argtypes = [ctypes.c_void_p]
 
     return lib
 
+
 _wpcap: Optional[ctypes.CDLL] = None
+
 
 def _get_wpcap() -> ctypes.CDLL:
     global _wpcap
@@ -64,23 +86,30 @@ def _get_wpcap() -> ctypes.CDLL:
         _wpcap = _load_wpcap()
     return _wpcap
 
+
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class MediaType(StrEnum):
     Unknown = "Unknown"
     Ethernet2 = "Ethernet2"
     Wifi = "Wifi"
+
     @classmethod
     def from_str(cls, string: str) -> MediaType:
-        if string == "802.3": return MediaType.Ethernet2
-        elif string == "Native 802.11": return MediaType.Wifi
-        else: return MediaType.Unknown
+        if string == "802.3":
+            return MediaType.Ethernet2
+        elif string == "Native 802.11":
+            return MediaType.Wifi
+        else:
+            return MediaType.Unknown
+
 
 class Physical:
     @dataclass(slots=True)
     class Interface:
-        name: str           # Scapy iface identifier (on Windows: GUID path)
-        description: str    # Human-readable NIC name
+        name: str  # Scapy iface identifier (on Windows: GUID path)
+        description: str  # Human-readable NIC name
         mac: str
         ip: str
         media_type: MediaType
@@ -92,7 +121,10 @@ class Physical:
 
         def IsConnected(self) -> bool:
             """Unreliable and slow, prefer the Virtual.Interface.connected property"""
-            import winreg, psutil # type: ignore
+            import psutil
+
+            import winreg  # type: ignore
+
             # scapy description = adapter model; psutil keys = Windows friendly name.
             # Bridge via GUID → registry → friendly name so we always hit the right NIC.
             # huh? I'm so glad the LLMs can figure these things out..
@@ -113,9 +145,11 @@ class Physical:
         def __hash__(self) -> int:
             return hash(self.name)
 
+
 @dataclass(slots=True)
 class Statistics:
     """Holds network frame statistics over one direction"""
+
     class Entry(NamedTuple):
         size: int
         timestamp: float
@@ -123,12 +157,23 @@ class Statistics:
     processed_max_size: int
     total_bytes: int = field(default=0, init=False)
     processed: Deque[Statistics.Entry] = field(init=False, default_factory=Deque)
-    counts: DefaultDict[Protocols, int] = field(init=False, default_factory=lambda: DefaultDict(int))
+    counts: DefaultDict[Protocols, int] = field(
+        init=False, default_factory=lambda: DefaultDict(int)
+    )
 
     def AggregateThroughput(self, time_s: float) -> int:
         """Aggregates measured throughput from the rolling buffer over entries that fit the timeframe"""
         now = time.time()
-        return int(sum([entry.size for entry in self.processed if (now - entry.timestamp) <= time_s]) / time_s)
+        return int(
+            sum(
+                [
+                    entry.size
+                    for entry in self.processed
+                    if (now - entry.timestamp) <= time_s
+                ]
+            )
+            / time_s
+        )
 
     def AddFrame(self, if_data: InterfaceData):
         """Logs frame metrics"""
@@ -147,9 +192,11 @@ class Statistics:
         self.processed = Deque()
         self.counts = DefaultDict(int)
 
+
 @dataclass(slots=True)
 class InterfaceMetrics:
     """Holds statistics over the entire interface, both for in and out"""
+
     ingress: Statistics
     egress: Statistics
 
@@ -158,37 +205,59 @@ class InterfaceMetrics:
         self.ingress.Clear()
         self.egress.Clear()
 
+
 class Virtual:
     @dataclass(slots=True)
     class Interface:
-        physical:      Optional[Physical.Interface]
-        metrics:       InterfaceMetrics
-        ingress_queue: Queue[List[Tuple[InterfaceData, Virtual.Interface]]]  # shared with Core, we write to this
+        physical: Optional[Physical.Interface]
+        metrics: InterfaceMetrics
+        ingress_queue: Queue[
+            List[Tuple[InterfaceData, Virtual.Interface]]
+        ]  # shared with Core, we write to this
         slot: int
         batch_size: int
         batch_latency: float
-        record_started:   Optional[float] = field(default=None, init=False, repr=False)
-        connected:        Optional[bool]  = field(default=None, init=False, repr=False)
-        disconnected_at:  Optional[float] = field(default=None, init=False, repr=False)
+        record_started: Optional[float] = field(default=None, init=False, repr=False)
+        connected: Optional[bool] = field(default=None, init=False, repr=False)
+        disconnected_at: Optional[float] = field(default=None, init=False, repr=False)
 
         _last_batch_s: float = field(default=0.0, init=False, repr=False)
-        _batch: List[Tuple[InterfaceData, Virtual.Interface]] = field(default_factory=lambda: list(), init=False, repr=False)
-        _stop_event:       threading.Event            = field(default_factory=threading.Event, init=False, repr=False)
-        _thread:           Optional[threading.Thread] = field(default=None,               init=False, repr=False)
-        _send_thread:      Optional[threading.Thread] = field(default=None,               init=False, repr=False)
-        _pcap_handle:      Optional[int]              = field(default=None,               init=False, repr=False)  # capture — only touched by capture thread
-        _pcap_send_handle: Optional[int]              = field(default=None,               init=False, repr=False)  # send — only touched by send thread
-        _send_queue:       Queue[Optional[InterfaceData]]     = field(default_factory=lambda: Queue(maxsize=512), init=False, repr=False)
+        _batch: List[Tuple[InterfaceData, Virtual.Interface]] = field(
+            default_factory=lambda: list(), init=False, repr=False
+        )
+        _stop_event: threading.Event = field(
+            default_factory=threading.Event, init=False, repr=False
+        )
+        _thread: Optional[threading.Thread] = field(
+            default=None, init=False, repr=False
+        )
+        _send_thread: Optional[threading.Thread] = field(
+            default=None, init=False, repr=False
+        )
+        _pcap_handle: Optional[int] = field(
+            default=None, init=False, repr=False
+        )  # capture — only touched by capture thread
+        _pcap_send_handle: Optional[int] = field(
+            default=None, init=False, repr=False
+        )  # send — only touched by send thread
+        _send_queue: Queue[Optional[InterfaceData]] = field(
+            default_factory=lambda: Queue(maxsize=512), init=False, repr=False
+        )
 
         def __str__(self) -> str:
             return str(self.physical)
 
         @property
         def running(self) -> bool:
-            return self._thread is not None and self._thread.is_alive() and not self._stop_event.is_set()
+            return (
+                self._thread is not None
+                and self._thread.is_alive()
+                and not self._stop_event.is_set()
+            )
 
         def IsConnected(self) -> Optional[bool]:
-            if self.physical is None: return None
+            if self.physical is None:
+                return None
             return self.physical.IsConnected()
 
         def ClearMetrics(self) -> None:
@@ -202,9 +271,11 @@ class Virtual:
             self._send_queue = Queue()
             self._stop_event.clear()
             self.record_started = time.time()
-            self.connected = True if self.physical.IsConnected() else None # used as a fallback for already connected devices
+            self.connected = (
+                True if self.physical.IsConnected() else None
+            )  # used as a fallback for already connected devices
             self.disconnected_at = None
-            self._thread      = threading.Thread(target=self._capture,     daemon=True)
+            self._thread = threading.Thread(target=self._capture, daemon=True)
             self._send_thread = threading.Thread(target=self._send_worker, daemon=True)
             self._thread.start()
             self._send_thread.start()
@@ -230,20 +301,21 @@ class Virtual:
         def _send_worker(self) -> None:
             """Drains the send queue and calls pcap_sendpacket; isolated so FrameHandler never blocks on NIC latency."""
             from queue import Empty
+
             wpcap = _get_wpcap()
             while not self._stop_event.is_set():
                 try:
                     if_data = self._send_queue.get()
                 except Empty:
                     continue
-                
+
                 if if_data is None:  # Stop() sentinel
                     break
-                
+
                 handle = self._pcap_send_handle
                 if handle is None:
                     continue
-                
+
                 rc = wpcap.pcap_sendpacket(handle, if_data.data, len(if_data.data))
                 if rc != 0:
                     # Silently drop the packet as we're not connected anymore
@@ -257,23 +329,31 @@ class Virtual:
                 return
 
             errbuf = ctypes.create_string_buffer(_PCAP_ERRBUF_SIZE)
-            wpcap  = _get_wpcap()
+            wpcap = _get_wpcap()
 
             # pcap_open requires the npcap device path (\Device\NPF_{GUID}),
             # not the Windows friendly name that scapy stores in iface.name.
-            pcap_device = f"\\Device\\NPF_{physical.guid}" if physical.guid else physical.name
+            pcap_device = (
+                f"\\Device\\NPF_{physical.guid}" if physical.guid else physical.name
+            )
 
             # Capture handle: NOCAPTURE_LOCAL suppresses npcap echoing our own sent frames back.
             rx_handle = wpcap.pcap_open(
                 pcap_device.encode(),
                 65535,
                 PCAP_OPENFLAG_PROMISCUOUS | PCAP_OPENFLAG_NOCAPTURE_LOCAL,
-                max(1, int(self.batch_latency * 1000)),  # read timeout ms — pcap_next_ex blocks at most this long per call
+                max(
+                    1, int(self.batch_latency * 1000)
+                ),  # read timeout ms — pcap_next_ex blocks at most this long per call
                 None,
                 errbuf,
             )
             if rx_handle is None:
-                logger.error("pcap_open (rx) failed for %s: %s", physical.name, errbuf.value.decode(errors="replace"))
+                logger.error(
+                    "pcap_open (rx) failed for %s: %s",
+                    physical.name,
+                    errbuf.value.decode(errors="replace"),
+                )
                 return
 
             # Send handle: separate from capture so FrameHandler and capture thread
@@ -288,14 +368,18 @@ class Virtual:
             )
             if tx_handle is None:
                 wpcap.pcap_close(rx_handle)
-                logger.error("pcap_open (tx) failed for %s: %s", physical.name, errbuf.value.decode(errors="replace"))
+                logger.error(
+                    "pcap_open (tx) failed for %s: %s",
+                    physical.name,
+                    errbuf.value.decode(errors="replace"),
+                )
                 return
 
-            self._pcap_handle      = rx_handle
+            self._pcap_handle = rx_handle
             self._pcap_send_handle = tx_handle
 
             pkt_header = ctypes.POINTER(_PcapPkthdr)()
-            pkt_data   = ctypes.c_char_p()
+            pkt_data = ctypes.c_char_p()
 
             try:
                 while not self._stop_event.is_set():
@@ -306,23 +390,25 @@ class Virtual:
                     )
                     if rc == 1:
                         length = pkt_header.contents.caplen
-                        data   = ctypes.string_at(pkt_data, length)
+                        data = ctypes.string_at(pkt_data, length)
                         self._on_packet(data)
                     elif rc == 0:
                         continue  # read timeout, loop back and check stop_event
                     else:
-                        logger.error("pcap_next_ex returned %d on slot %d", rc, self.slot)
+                        logger.error(
+                            "pcap_next_ex returned %d on slot %d", rc, self.slot
+                        )
                         break
             finally:
                 self._pcap_send_handle = None
-                self._pcap_handle      = None
+                self._pcap_handle = None
                 wpcap.pcap_close(tx_handle)
                 wpcap.pcap_close(rx_handle)
 
         def _on_packet(self, raw_data: bytes) -> None:
             if_data = InterfaceData(raw_data, Frame.from_bytes(raw_data))
             self._batch.append((if_data, self))
-            
+
             now = time.monotonic()
             if len(self._batch) >= self.batch_size:
                 self._enqueue_batch(now)
@@ -330,7 +416,8 @@ class Virtual:
                 self._enqueue_batch(now)
 
         def _enqueue_batch(self, now: float) -> None:
-            if len(self._batch) == 0: return
+            if len(self._batch) == 0:
+                return
             self.ingress_queue.put(self._batch)
             self._last_batch_s = now
             self._batch = []

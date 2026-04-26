@@ -1,47 +1,52 @@
 from __future__ import annotations
 
-import os
-import threading
-from typing import ClassVar, Callable
+from .types import BaseModel, Env, Path
 
-from .types import Env, BaseModel, Path
-from pydantic import PrivateAttr # type: ignore
-
-import tomllib
 import tomli_w
+from pydantic import PrivateAttr  # type: ignore
 
 import logging
+import os
+import threading
+import tomllib
+from typing import Callable, ClassVar
+
 logger = logging.getLogger(__name__)
 
-from watchdog.events import FileModifiedEvent, FileSystemEventHandler # type: ignore
-from watchdog.observers import Observer # type: ignore
-
+from watchdog.events import FileModifiedEvent, FileSystemEventHandler  # type: ignore
+from watchdog.observers import Observer  # type: ignore
 
 # ── TOML helpers ──────────────────────────────────────────────────────────────
+
 
 def _load_toml(filepath: Path) -> dict:
     with open(filepath, "rb") as f:
         return tomllib.load(f)
+
 
 def _write_toml(instance: BaseModel, filepath: Path) -> None:
     filepath.parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "wb") as f:
         tomli_w.dump(instance.model_dump(), f)
 
+
 def _from_toml(cls: type, filepath: Path):
     """Load a Pydantic model from TOML. Creates the file with defaults if missing."""
     if not filepath.exists():
-        logger.info("Creating default %s config at %s", cls.__name__, filepath.resolve())
+        logger.info(
+            "Creating default %s config at %s", cls.__name__, filepath.resolve()
+        )
         default = cls()
         _write_toml(default, filepath)
         return default
     logger.debug("Loading %s config from %s", cls.__name__, filepath.resolve())
-    return cls.model_validate(_load_toml(filepath)) # type: ignore
+    return cls.model_validate(_load_toml(filepath))  # type: ignore
 
 
 # ── Live file watcher ─────────────────────────────────────────────────────────
 
 _live_reload_lock = threading.Lock()
+
 
 class _LiveFileHandler(FileSystemEventHandler):
     """Watchdog handler — debounces rapid save events and fires on_reload."""
@@ -50,10 +55,10 @@ class _LiveFileHandler(FileSystemEventHandler):
 
     def __init__(self, filepath: Path, on_reload: Callable):
         super().__init__()
-        self._filepath     = filepath.resolve()
-        self._on_reload    = on_reload
+        self._filepath = filepath.resolve()
+        self._on_reload = on_reload
         self._debounce_lock = threading.Lock()
-        self._last_t       = 0.0
+        self._last_t = 0.0
 
     def on_modified(self, event) -> None:
         if not isinstance(event, FileModifiedEvent):
@@ -62,6 +67,7 @@ class _LiveFileHandler(FileSystemEventHandler):
             return
 
         import time
+
         now = time.monotonic()
         with self._debounce_lock:
             if now - self._last_t < self._DEBOUNCE_S:
@@ -69,7 +75,7 @@ class _LiveFileHandler(FileSystemEventHandler):
             self._last_t = now
 
         try:
-            new_live = _from_toml(Live, self._filepath).Prepare() # type: ignore
+            new_live = _from_toml(Live, self._filepath).Prepare()  # type: ignore
         except Exception as exc:
             logger.warning("Live config reload failed, keeping current: %s", exc)
             return
@@ -82,9 +88,11 @@ class _LiveFileHandler(FileSystemEventHandler):
 
 # ── Settings models ───────────────────────────────────────────────────────────
 
+
 class UI(BaseModel):
     refresh_rate_ms: int = 3000
     log_drain_ms: int = 3000
+
 
 class Core(BaseModel):
     interface_count: int = 2
@@ -93,8 +101,10 @@ class Core(BaseModel):
     dedup_last_frames: int = 64
     wmi_delay_s: int = 1
 
+
 class Metrics(BaseModel):
     throughput_buffer_size: int = 100
+
 
 class Static(BaseModel):
     ui: UI = UI()
@@ -103,7 +113,7 @@ class Static(BaseModel):
 
     @staticmethod
     def Get(filepath: Path) -> Static:
-        return _from_toml(Static, filepath).Prepare() # type: ignore
+        return _from_toml(Static, filepath).Prepare()  # type: ignore
 
     @staticmethod
     def Default() -> Static:
@@ -111,11 +121,18 @@ class Static(BaseModel):
 
     def Prepare(self) -> Static:
         default = Static.Default()
-        if (self.core.interface_count < 2 or self.core.interface_count > 32):
-            logger.warning(f'Invalid value for "Static.interface_count", "{self.core.interface_count}" must be in range 2-32, using default {default.core.interface_count}')
+        if self.core.interface_count < 2 or self.core.interface_count > 32:
+            logger.warning(
+                f'Invalid value for "Static.interface_count", "{self.core.interface_count}" must be in range 2-32, using default {default.core.interface_count}'
+            )
             self.interface_count = default.core.interface_count
-        if (self.metrics.throughput_buffer_size < 10 or self.metrics.throughput_buffer_size > 1_000_000):
-            logger.warning(f'Invalid value for "Static.processed_size", "{self.metrics.throughput_buffer_size}" must be in range 1000-1000000, using default {default.metrics.throughput_buffer_size}')
+        if (
+            self.metrics.throughput_buffer_size < 10
+            or self.metrics.throughput_buffer_size > 1_000_000
+        ):
+            logger.warning(
+                f'Invalid value for "Static.processed_size", "{self.metrics.throughput_buffer_size}" must be in range 1000-1000000, using default {default.metrics.throughput_buffer_size}'
+            )
             self.metrics.throughput_buffer_size = default.metrics.throughput_buffer_size
         return self
 
@@ -125,6 +142,7 @@ class CoreLive(BaseModel):
     cleanup_thread_sleep_s: float = 15
     core_thread_sleep_s: float = 3
 
+
 class Live(BaseModel):
     core: CoreLive = CoreLive()
     # ClassVar keeps the watching instance alive across configuration swaps.
@@ -133,13 +151,13 @@ class Live(BaseModel):
     _watching: ClassVar[Live | None] = None
 
     # PrivateAttr: Pydantic ignores these for validation and serialization
-    _observer: Observer | None  = PrivateAttr(default=None) # type: ignore
-    _filepath:  Path | None     = PrivateAttr(default=None)
+    _observer: Observer | None = PrivateAttr(default=None)  # type: ignore
+    _filepath: Path | None = PrivateAttr(default=None)
     _on_reload: Callable | None = PrivateAttr(default=None)
 
     @staticmethod
     def Get(filepath: Path) -> Live:
-        live = _from_toml(Live, filepath).Prepare() # type: ignore
+        live = _from_toml(Live, filepath).Prepare()  # type: ignore
         live._filepath = filepath
         return live
 
@@ -153,10 +171,12 @@ class Live(BaseModel):
         """Start watching the config file. Keeps this instance alive via _watching."""
         if self._observer is not None:
             return self
-        assert self._filepath is not None, "Watch() called on a Live not created via Get()"
+        assert self._filepath is not None, (
+            "Watch() called on a Live not created via Get()"
+        )
 
         self._on_reload = on_reload
-        Live._watching  = self  # prevent GC when Configuration.live is swapped
+        Live._watching = self  # prevent GC when Configuration.live is swapped
 
         handler = _LiveFileHandler(self._filepath, on_reload)
         obs = Observer()
@@ -193,23 +213,24 @@ class Live(BaseModel):
 
 # ── Configuration singleton ───────────────────────────────────────────────────
 
+
 class Configuration(BaseModel):
     _instance: ClassVar[Configuration | None] = None
 
-    env:    Env
-    live:   Live
+    env: Env
+    live: Live
     static: Static
 
     @staticmethod
     def Get() -> Configuration:
         if Configuration._instance is not None:
             return Configuration._instance
-        env  = Env.Get()
-        live = Live.Get(env.config_directory / 'live.toml')
-        live.Watch(lambda new: setattr(Configuration._instance, 'live', new))
+        env = Env.Get()
+        live = Live.Get(env.config_directory / "live.toml")
+        live.Watch(lambda new: setattr(Configuration._instance, "live", new))
         Configuration._instance = Configuration(
             env=env,
             live=live,
-            static=Static.Get(env.config_directory / 'static.toml'),
+            static=Static.Get(env.config_directory / "static.toml"),
         )
         return Configuration._instance

@@ -1,8 +1,8 @@
+from PySwitch.network.types import IP4, MAC, UDP, Ethernet2, IPv4
+
 import ctypes
 import socket
 import struct
-
-from PySwitch.network.types import MAC, IPv4, Ethernet2, IP4, UDP
 
 
 def resolve_dns(hostname: str) -> str:
@@ -15,8 +15,8 @@ def resolve_arp(dst_ip: str, src_ip: str = "") -> bytes:
     iphlpapi = ctypes.windll.iphlpapi  # type: ignore
     mac_buf = (ctypes.c_ubyte * 6)()
     buf_len = ctypes.c_ulong(6)
-    dst_dword = struct.unpack('<I', socket.inet_aton(dst_ip))[0]
-    src_dword = struct.unpack('<I', socket.inet_aton(src_ip))[0] if src_ip else 0
+    dst_dword = struct.unpack("<I", socket.inet_aton(dst_ip))[0]
+    src_dword = struct.unpack("<I", socket.inet_aton(src_ip))[0] if src_ip else 0
     rc = iphlpapi.SendARP(dst_dword, src_dword, mac_buf, ctypes.byref(buf_len))
     if rc != 0:
         raise OSError(f"SendARP failed: error code {rc}")

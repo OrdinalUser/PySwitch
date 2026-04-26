@@ -6,11 +6,22 @@ dependencies = [
     "dotenv>=0.9.9",
     "psutil>=7.2.2",
     "pydantic>=2.12.5",
-    "pyside6>=6.10.2",
-    "pyside6-fluent-widgets>=1.11.1",
+    "pyside6==6.10.2",
+    "pyside6-fluent-widgets[full]==1.11.2",
     "scapy>=2.7.0",
     "tomli-w>=1.2.0",
     "types-psutil>=7.2.2.20260130",
     "watchdog>=6.0.0",
     "wmi>=1.5.1",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
+
+[tool.ruff.lint]
+select = ["I"]  # ensure isort rules are always on
+
+[tool.ruff.lint.isort]
+section-order = ["future", "local-folder", "first-party", "third-party", "standard-library"]

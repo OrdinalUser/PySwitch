@@ -1,13 +1,15 @@
+from .interface import Physical
+
+from scapy.all import Packet, sniff
+
 import threading
 from typing import Callable
 
-from scapy.all import sniff, Packet
-
-from .interface import Physical
-
 
 class Sniffer:
-    def __init__(self, interface: Physical.Interface, callback: Callable[[Packet], None]):
+    def __init__(
+        self, interface: Physical.Interface, callback: Callable[[Packet], None]
+    ):
         self._iface = interface
         self._callback = callback
         self._thread: threading.Thread | None = None

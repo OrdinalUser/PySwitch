@@ -1,50 +1,48 @@
-import time
-
 import PySwitch.network as network
 import PySwitch.network.service as svc
 import PySwitch.startup as startup
-from PySwitch.common import List, Tuple, Configuration, Live, UnionType, Union
+from PySwitch.common import Configuration, List, Live, Tuple, Union, UnionType
 
 from pydantic import BaseModel as _PydanticBase
-
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QVBoxLayout,
-    QGridLayout,
-    QStackedWidget,
-    QWidget,
-    QLabel,
-    QPlainTextEdit,
-    QTableWidgetItem,
-    QHeaderView,
     QAbstractItemView,
     QDoubleSpinBox,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QPlainTextEdit,
+    QStackedWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
-
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont
-
-from qfluentwidgets import ( # type: ignore
-    ComboBox,
-    LineEdit,
-    PushButton,
-    PrimaryPushButton,
-    TransparentPushButton,
-    SpinBox,
-    SwitchButton,
-    SimpleCardWidget,
-    MessageBoxBase,
-    SubtitleLabel,
-    StrongBodyLabel,
+from qfluentwidgets import (  # type: ignore
     BodyLabel,
     CaptionLabel,
+    ComboBox,
     FlowLayout,
-    TableWidget
+    LineEdit,
+    MessageBoxBase,
+    PrimaryPushButton,
+    PushButton,
+    SimpleCardWidget,
+    SpinBox,
+    StrongBodyLabel,
+    SubtitleLabel,
+    SwitchButton,
+    TableWidget,
+    TransparentPushButton,
 )
+
+import time
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _THROUGHPUT_WINDOW_S = 5.0
+
 
 def _fmt_bytes(n: int, suffix: str = "/s") -> str:
     if n >= 1_048_576:
@@ -52,6 +50,7 @@ def _fmt_bytes(n: int, suffix: str = "/s") -> str:
     if n >= 1024:
         return f"{n / 1024:.1f} KiB{suffix}"
     return f"{n} B{suffix}"
+
 
 def _fmt_elapsed(started: float) -> str:
     s = int(time.time() - started)
@@ -65,22 +64,22 @@ def _fmt_elapsed(started: float) -> str:
 
 
 _PROTOCOL_ROWS: List[Tuple[network.Protocols, str]] = [
-    (protocol, protocol.value)
-    for protocol in network.Protocols
+    (protocol, protocol.value) for protocol in network.Protocols
 ]
 
 # ── Assign NIC dialog ─────────────────────────────────────────────────────────
 
+
 class AssignNICDialog(MessageBoxBase):
     def __init__(self, slot: int, parent=None):
         super().__init__(parent)
-        self._slot  = slot
+        self._slot = slot
         self._ifaces: list[network.Physical.Interface] = []
 
         self._title = SubtitleLabel(f"Assign NIC to Slot {slot}", self)
 
         row = QHBoxLayout()
-        self._combo       = ComboBox(self)
+        self._combo = ComboBox(self)
         self._combo.setMinimumWidth(300)
         self._refresh_btn = PushButton("Refresh", self)
         row.addWidget(self._combo, stretch=1)
@@ -96,7 +95,9 @@ class AssignNICDialog(MessageBoxBase):
         self._populate(force_reload=False)
 
     def _populate(self, force_reload: bool = True) -> None:
-        self._ifaces = network.Core.Get().interfaces.AvailableNICs(exclude_slot=self._slot, force_reload=force_reload)
+        self._ifaces = network.Core.Get().interfaces.AvailableNICs(
+            exclude_slot=self._slot, force_reload=force_reload
+        )
         self._combo.clear()
         for iface in self._ifaces:
             self._combo.addItem(iface.description or iface.name)
@@ -105,14 +106,16 @@ class AssignNICDialog(MessageBoxBase):
         idx = self._combo.currentIndex()
         return self._ifaces[idx] if 0 <= idx < len(self._ifaces) else None
 
+
 # ── Interface slot card ───────────────────────────────────────────────────────
 
+
 class InterfaceSlotCard(SimpleCardWidget):
-    assign_clicked     = Signal(int)
+    assign_clicked = Signal(int)
     disconnect_clicked = Signal(int)
 
-    _DOT_UNKNOWN      = "background: #888888; border-radius: 5px;"
-    _DOT_CONNECTED    = "background: #3cb371; border-radius: 5px;"
+    _DOT_UNKNOWN = "background: #888888; border-radius: 5px;"
+    _DOT_CONNECTED = "background: #3cb371; border-radius: 5px;"
     _DOT_DISCONNECTED = "background: #cc3333; border-radius: 5px;"
 
     def __init__(self, slot: int, parent=None):
@@ -126,8 +129,8 @@ class InterfaceSlotCard(SimpleCardWidget):
 
         # Header: "Slot N"
         header = QHBoxLayout()
-        self._slot_label  = StrongBodyLabel(f"Slot {slot}", self)
-        self._status_dot  = QLabel(self)
+        self._slot_label = StrongBodyLabel(f"Slot {slot}", self)
+        self._status_dot = QLabel(self)
         self._status_dot.setFixedSize(10, 10)
         self._status_dot.setStyleSheet(self._DOT_UNKNOWN)
         header.addWidget(self._slot_label)
@@ -140,8 +143,8 @@ class InterfaceSlotCard(SimpleCardWidget):
         # Interface info
         self._friendly_label = BodyLabel("—", self)
         self._name_label = CaptionLabel("", self)
-        self._mac_label  = CaptionLabel("", self)
-        self._ip_label   = CaptionLabel("", self)
+        self._mac_label = CaptionLabel("", self)
+        self._ip_label = CaptionLabel("", self)
         root.addWidget(self._friendly_label)
         root.addWidget(self._name_label)
         root.addWidget(self._mac_label)
@@ -150,8 +153,8 @@ class InterfaceSlotCard(SimpleCardWidget):
         root.addSpacing(8)
 
         # Throughput
-        self._rx_label      = BodyLabel("↓  —", self)
-        self._tx_label      = BodyLabel("↑  —", self)
+        self._rx_label = BodyLabel("↓  —", self)
+        self._tx_label = BodyLabel("↑  —", self)
         self._elapsed_label = CaptionLabel("", self)
         root.addWidget(self._rx_label)
         root.addWidget(self._tx_label)
@@ -165,7 +168,7 @@ class InterfaceSlotCard(SimpleCardWidget):
         self._stats_btn.clicked.connect(self._toggle_stats)
         toggle_row.addStretch()
         toggle_row.addWidget(self._stats_btn)
-        
+
         root.addLayout(toggle_row)
 
         # Stats section — hidden by default
@@ -176,21 +179,25 @@ class InterfaceSlotCard(SimpleCardWidget):
         grid.setSpacing(2)
         for col, text in enumerate(("", "IN", "OUT")):
             lbl = CaptionLabel(text, self._stats_section)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight if col > 0 else Qt.AlignmentFlag.AlignLeft)
+            lbl.setAlignment(
+                Qt.AlignmentFlag.AlignRight if col > 0 else Qt.AlignmentFlag.AlignLeft
+            )
             grid.addWidget(lbl, 0, col)
         self._stats_labels: list[tuple[CaptionLabel, CaptionLabel]] = []
         for row_i, (_, name) in enumerate(_PROTOCOL_ROWS, start=1):
-            name_lbl = CaptionLabel(name,  self._stats_section)
-            in_lbl   = CaptionLabel("0",   self._stats_section)
-            out_lbl  = CaptionLabel("0",   self._stats_section)
+            name_lbl = CaptionLabel(name, self._stats_section)
+            in_lbl = CaptionLabel("0", self._stats_section)
+            out_lbl = CaptionLabel("0", self._stats_section)
             in_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             out_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             grid.addWidget(name_lbl, row_i, 0)
-            grid.addWidget(in_lbl,   row_i, 1)
-            grid.addWidget(out_lbl,  row_i, 2)
+            grid.addWidget(in_lbl, row_i, 1)
+            grid.addWidget(out_lbl, row_i, 2)
             self._stats_labels.append((in_lbl, out_lbl))
         self._clear_btn = TransparentPushButton("Clear", self._stats_section)
-        self._clear_btn.clicked.connect(lambda: network.Core.Get().ClearMetrics(self._slot))
+        self._clear_btn.clicked.connect(
+            lambda: network.Core.Get().ClearMetrics(self._slot)
+        )
         grid.addWidget(self._clear_btn, len(_PROTOCOL_ROWS) + 1, 2)
         root.addWidget(self._stats_section)
 
@@ -199,14 +206,16 @@ class InterfaceSlotCard(SimpleCardWidget):
         # Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
-        self._assign_btn     = PrimaryPushButton("Assign",     self)
+        self._assign_btn = PrimaryPushButton("Assign", self)
         self._disconnect_btn = PushButton("Disconnect", self)
         btn_row.addWidget(self._assign_btn)
         btn_row.addWidget(self._disconnect_btn)
         root.addLayout(btn_row)
 
-        self._assign_btn.clicked.connect(    lambda: self.assign_clicked.emit(self._slot))
-        self._disconnect_btn.clicked.connect(lambda: self.disconnect_clicked.emit(self._slot))
+        self._assign_btn.clicked.connect(lambda: self.assign_clicked.emit(self._slot))
+        self._disconnect_btn.clicked.connect(
+            lambda: self.disconnect_clicked.emit(self._slot)
+        )
 
         self._set_unassigned()
 
@@ -254,22 +263,34 @@ class InterfaceSlotCard(SimpleCardWidget):
 
         rx = iface.metrics.ingress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
         tx = iface.metrics.egress.AggregateThroughput(_THROUGHPUT_WINDOW_S)
-        self._rx_label.setText(f"↓ {_fmt_bytes(rx)} ({_fmt_bytes(iface.metrics.ingress.total_bytes, suffix="")})")
-        self._tx_label.setText(f"↑ {_fmt_bytes(tx)} ({_fmt_bytes(iface.metrics.egress.total_bytes, suffix="")})")
+        self._rx_label.setText(
+            f"↓ {_fmt_bytes(rx)} ({_fmt_bytes(iface.metrics.ingress.total_bytes, suffix='')})"
+        )
+        self._tx_label.setText(
+            f"↑ {_fmt_bytes(tx)} ({_fmt_bytes(iface.metrics.egress.total_bytes, suffix='')})"
+        )
 
-        elapsed = f"Elapsed time {_fmt_elapsed(iface.record_started)}" if iface.record_started is not None else ""
+        elapsed = (
+            f"Elapsed time {_fmt_elapsed(iface.record_started)}"
+            if iface.record_started is not None
+            else ""
+        )
         self._elapsed_label.setText(elapsed)
 
         # connected = iface.connected if iface.connected is not None else p.IsConnected()
         connected = iface.connected
-        self._status_dot.setStyleSheet(self._DOT_CONNECTED if connected else self._DOT_DISCONNECTED)
+        self._status_dot.setStyleSheet(
+            self._DOT_CONNECTED if connected else self._DOT_DISCONNECTED
+        )
         self._stats_btn.setEnabled(True)
         self._update_stats(iface.metrics)
 
         self._assign_btn.setVisible(False)
         self._disconnect_btn.setVisible(True)
 
+
 # ── Interfaces subinterface ───────────────────────────────────────────────────
+
 
 class Interfaces(QWidget):
     def __init__(self, parent=None):
@@ -319,6 +340,7 @@ class Interfaces(QWidget):
 
 # ── Logs ──────────────────────────────────────────────────────────────────────
 
+
 class Logs(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -336,7 +358,9 @@ class Logs(QWidget):
         self._console = QPlainTextEdit(self)
         self._console.setReadOnly(True)
         self._console.setFont(QFont("Consolas", 10))
-        self._console.setMaximumBlockCount(2000)  # cap lines so it never grows unbounded
+        self._console.setMaximumBlockCount(
+            2000
+        )  # cap lines so it never grows unbounded
 
         layout.addLayout(toolbar)
         layout.addWidget(self._console)
@@ -344,7 +368,9 @@ class Logs(QWidget):
         self._clear_btn.clicked.connect(self._console.clear)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(Configuration.Get().static.ui.log_drain_ms)  # drain at ~20 fps
+        self._timer.setInterval(
+            Configuration.Get().static.ui.log_drain_ms
+        )  # drain at ~20 fps
         self._timer.timeout.connect(self._drain)
         self._timer.start()
 
@@ -358,6 +384,7 @@ class Logs(QWidget):
 
 
 # ── MAC Table ─────────────────────────────────────────────────────────────────
+
 
 class MACTableView(QWidget):
     _COLUMNS = ("MAC Address", "Interface Name", "Slot", "Expires In (s)")
@@ -406,7 +433,15 @@ class MACTableView(QWidget):
         for row, entry in enumerate(entries):
             remaining = max(0.0, entry.timestamp_expiration - now)
             self._table.setItem(row, 0, QTableWidgetItem(str(entry.mac)))
-            self._table.setItem(row, 1, QTableWidgetItem(entry.interface.physical.name if entry.interface.physical else "Unknown"))
+            self._table.setItem(
+                row,
+                1,
+                QTableWidgetItem(
+                    entry.interface.physical.name
+                    if entry.interface.physical
+                    else "Unknown"
+                ),
+            )
             self._table.setItem(row, 2, QTableWidgetItem(str(entry.interface.slot)))
             self._table.setItem(row, 3, QTableWidgetItem(f"{remaining:.1f}"))
 
@@ -419,10 +454,11 @@ class MACTableView(QWidget):
 
 _SEVERITY_OPTIONS: list[tuple[str, int]] = [
     ("Critical", 2),
-    ("Error",    3),
-    ("Warning",  4),
-    ("Info",     6),
+    ("Error", 3),
+    ("Warning", 4),
+    ("Info", 6),
 ]
+
 
 class _SyslogSettingsCard(SimpleCardWidget):
     def __init__(self, service: "svc.Syslog", parent=None):
@@ -445,7 +481,9 @@ class _SyslogSettingsCard(SimpleCardWidget):
         # not even a QFont() with explicit point size fixes it
         self._enabled = SwitchButton(self)
         self._enabled.setChecked(s.enabled)
-        self._enabled.checkedChanged.connect(lambda v: setattr(self._service.settings, 'enabled', v))
+        self._enabled.checkedChanged.connect(
+            lambda v: setattr(self._service.settings, "enabled", v)
+        )
         row.addWidget(lbl)
         row.addStretch()
         row.addWidget(self._enabled)
@@ -512,13 +550,14 @@ class _SyslogSettingsCard(SimpleCardWidget):
 
     def _on_apply(self) -> None:
         error = self._service.test_and_apply(
-            server_ip = self._server_ip.text().strip(),
-            source_ip = self._source_ip.text().strip(),
-            port      = self._port.value(),
-            severity  = self._severity_values[self._severity.currentIndex()],
+            server_ip=self._server_ip.text().strip(),
+            source_ip=self._source_ip.text().strip(),
+            port=self._port.value(),
+            severity=self._severity_values[self._severity.currentIndex()],
         )
         self._status.setText(error or "Settings applied.")
         QTimer.singleShot(3000, lambda: self._status.setText(""))
+
 
 class Services(QWidget):
     def __init__(self, parent=None):
@@ -545,7 +584,9 @@ class Services(QWidget):
             else:
                 continue
             btn = TransparentPushButton(svc_type.__name__, sidebar)
-            btn.clicked.connect(lambda checked=False, p=card: self._stack.setCurrentWidget(p))
+            btn.clicked.connect(
+                lambda checked=False, p=card: self._stack.setCurrentWidget(p)
+            )
             sidebar_layout.addWidget(btn)
             self._stack.addWidget(card)
 
@@ -559,8 +600,10 @@ class Services(QWidget):
 
 # ── Live Config ───────────────────────────────────────────────────────────────
 
+
 def _field_label(name: str) -> str:
     return name.replace("_", " ").title()
+
 
 def _unwrap_annotation(annotation):
     """Strip Optional/Union wrappers and return the bare type."""
@@ -569,6 +612,7 @@ def _unwrap_annotation(annotation):
         args = [a for a in annotation.__args__ if a is not type(None)]
         return args[0] if args else annotation
     return annotation
+
 
 class LiveConfigView(QWidget):
     def __init__(self, parent=None):
@@ -596,7 +640,7 @@ class LiveConfigView(QWidget):
 
         btn_row = QHBoxLayout()
         self._reload_btn = PushButton("Reload", card)
-        self._apply_btn  = PrimaryPushButton("Apply", card)
+        self._apply_btn = PrimaryPushButton("Apply", card)
         self._reload_btn.clicked.connect(self._load)
         self._apply_btn.clicked.connect(self._on_apply)
         btn_row.addStretch()
@@ -617,7 +661,9 @@ class LiveConfigView(QWidget):
 
             if isinstance(ann, type) and issubclass(ann, _PydanticBase):
                 layout.addSpacing(4)
-                layout.addWidget(CaptionLabel(_field_label(field_name).upper(), parent_widget))
+                layout.addWidget(
+                    CaptionLabel(_field_label(field_name).upper(), parent_widget)
+                )
                 self._build_fields(ann, parent_widget, layout, prefix=key)
                 continue
 
@@ -683,7 +729,7 @@ class LiveConfigView(QWidget):
             if widget is None:
                 continue
             if isinstance(widget, QDoubleSpinBox):
-                result[field_name] = widget.value() # type: ignore
+                result[field_name] = widget.value()  # type: ignore
             elif isinstance(widget, SpinBox):
                 result[field_name] = widget.value()
             elif isinstance(widget, LineEdit):
@@ -698,6 +744,7 @@ class LiveConfigView(QWidget):
 
     def _on_apply(self) -> None:
         from pydantic import ValidationError
+
         try:
             live = Live.model_validate(self._collect_values(Live, prefix=""))
         except ValidationError as e:
